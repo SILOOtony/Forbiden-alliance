@@ -72,3 +72,22 @@ bool CheckPlaneMapCollision(PlayerState *state, GameMap *map) {
 
     return false;
 }
+
+void CheckProjectilePlayersCollisions(Projectile projectiles[], int maxProjectiles, PlayerState players[], const bool connected[], int maxClients, int my_id, int damage_dealt[]) {
+    for (int i = 0; i < maxProjectiles; i++) {
+        if (!projectiles[i].active) continue;
+
+        for (int p = 0; p < maxClients; p++) {
+            // On ne teste pas la collision contre soi-même ni contre les joueurs absents/morts
+            if (p == my_id) continue;
+            if (!connected[p] || !players[p].is_alive) continue;
+
+            // Collision sphère-sphère entre le missile (1.0f) et l'avion ennemi (3.5f)
+            if (CheckCollisionSpheres(projectiles[i].position, 1.0f, players[p].position, 3.5f)) {
+                projectiles[i].active = false;          // Le missile explose à l'impact
+                damage_dealt[p] += projectiles[i].damage; // On enregistre les dégâts infligés au joueur p
+                break;
+            }
+        }
+    }
+}

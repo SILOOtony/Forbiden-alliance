@@ -20,6 +20,7 @@ typedef struct {
     double last_seen;
     PlayerState state;
     Projectile projectile[MAX_PLAYER_PROJECTILE];
+    int pending_damage;
 } ClientSlot;
 
 static double GetCurrentTimeSec(void) {
@@ -117,6 +118,14 @@ int main(void) {
                         cityMap.buildings[b].is_destroyed = true;
                     }
                 }
+                
+                // Répartit les dégâts infligés par ce joueur vers les joueurs touchés
+                for (int target = 0; target < MAX_CLIENTS; target++) {
+                    if (inPacket.damage_dealt[target] > 0) {
+                        clients[target].pending_damage += inPacket.damage_dealt[target];
+                    }
+                }
+
             }
         }
 
@@ -153,6 +162,10 @@ int main(void) {
             for (int b = 0; b < cityMap.building_count; b++) {
                 outPacket.building_destroyed[b] = cityMap.buildings[b].is_destroyed;
             }         
+
+            // Transmet les dégâts reçus à ce client puis remet le compteur à zéro
+            outPacket.damage_received = clients[i].pending_damage;
+            clients[i].pending_damage = 0;
 
             memcpy(outPacket.projectiles, projectile, sizeof(outPacket.projectiles));
         

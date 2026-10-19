@@ -15,18 +15,20 @@ typedef struct {
     float yaw;
     float roll;
     int hp;
+    int damage_dealt[MAX_CLIENTS]; // NOUVEAU : Dégâts infligés aux autres avions ce Tick
     bool is_alive;
-    bool building_destroyed[MAX_BUILDINGS]; // Informe le serveur des bâtiments qu'on a détruits
+    bool building_destroyed[MAX_BUILDINGS];
     Projectile projectiles[MAX_PLAYER_PROJECTILE];
+    
 } ClientPacket;
 
 // Paquet envoyé par le Serveur -> à tous les Clients (à chaque Tick)
 typedef struct {
     int your_id;
-    unsigned int map_seed;// 4 octets : permet de générer la même ville !
+    unsigned int map_seed;
     bool connected[MAX_CLIENTS];
-    bool building_destroyed[MAX_BUILDINGS]; // 200 octets : synchronise les immeubles détruits
+    bool building_destroyed[MAX_BUILDINGS];
+    int damage_received; // NOUVEAU : Dégâts que ce joueur vient de subir
     PlayerState players[MAX_CLIENTS];
     Projectile projectiles[MAX_PROJECTILES];
-    
 } ServerPacket;

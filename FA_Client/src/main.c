@@ -30,7 +30,7 @@ int main(void) {
     struct sockaddr_in serverAddr = { 0 };
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(SERVER_PORT);
-    inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
+    inet_pton(AF_INET, "10.204.28.187", &serverAddr.sin_addr);
 
     ServerPacket latestServerData = { 0 };
     latestServerData.your_id = -1;
@@ -101,7 +101,19 @@ int main(void) {
                 CheckProjectileMapCollisions(projectile, MAX_PLAYER_PROJECTILE, &cityMap);
                 CheckProjectileDroneCollisions(projectile, MAX_PLAYER_PROJECTILE, drones, MAX_DRONE_COUNT);
 
-                // --- ENVOI DE NOTRE POSITION ET DES BÂTIMENTS DÉTRUITS AU SERVEUR ---
+                // Détection des impacts de nos projectiles sur les avions des autres joueurs
+                int damage_dealt[MAX_CLIENTS] = { 0 };
+                CheckProjectilePlayersCollisions(
+                    projectile,
+                    MAX_PLAYER_PROJECTILE,
+                    latestServerData.players,
+                    latestServerData.connected,
+                    MAX_CLIENTS,
+                    latestServerData.your_id,
+                    damage_dealt
+                );
+
+                // --- ENVOI DE NOTRE POSITION, TIRS, DÉGÂTS ET BÂTIMENTS DÉTRUITS AU SERVEUR ---
                 ClientPacket outPacket = {
                     .position = plane.position,
                     .pitch = plane.pitch,
@@ -111,6 +123,7 @@ int main(void) {
                     .is_alive = plane.is_alive
                 };
                 memcpy(outPacket.projectiles, projectile, sizeof(outPacket.projectiles));
+                memcpy(outPacket.damage_dealt, damage_dealt, sizeof(outPacket.damage_dealt));
 
                 for (int b = 0; b < cityMap.building_count; b++) {
                     outPacket.building_destroyed[b] = cityMap.buildings[b].is_destroyed;
@@ -122,6 +135,15 @@ int main(void) {
             ServerPacket inPacket;
             while (recvfrom(netSocket, &inPacket, sizeof(inPacket), 0, NULL, NULL) == sizeof(inPacket)) {
                 latestServerData = inPacket;
+
+                // Si un autre joueur nous a touché, on soustrait les dégâts reçus à nos HP
+                if (inPacket.damage_received > 0 && plane.is_alive) {
+                    plane.hp -= inPacket.damage_received;
+                    if (plane.hp <= 0) {
+                        plane.hp = 0;
+                        plane.is_alive = false;
+                    }
+                }
 
                 // Si le serveur utilise une graine différente, on régénère la même carte que lui
                 if (cityMap.seed != latestServerData.map_seed && latestServerData.map_seed != 0) {
