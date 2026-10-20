@@ -1,6 +1,7 @@
 #include "playerMovment.h"
 #include "rlgl.h"
 #include <math.h>
+#include "raymath.h"
 
 void InitPlayerState(PlayerState *state) {
     state->position = (Vector3){ 0.0f, 80.0f, 250.0f };
@@ -17,51 +18,68 @@ void InitPlayerState(PlayerState *state) {
     state->current_slot = 0;
 }
 
-void UpdatePlayerMovement(PlayerState *state, KeyBindings *controls, float dt) {
-    float turn_speed = 1.5f;  // Vitesse de virage
-    float pitch_speed = 1.2f; // Vitesse de montée/descente
-    float target_roll = 0.0f; // Inclinaison cible des ailes
+void UpdatePlayerMovement(PlayerState *plane, KeyBindings *controls, float dt) {
+    if (!plane->is_alive) return;
 
-    // Monter / Piquer du nez (W / S)
-    if (IsKeyDown(controls->bindings[ACTION_UP])) {
-        state->pitch += pitch_speed * dt;
-    }
-    if (IsKeyDown(controls->bindings[ACTION_DOWN])) {
-        state->pitch -= pitch_speed * dt;
-    }
+    // --- 1. LECTURE DE LA SOURIS AVEC LIMITATION ET INERTIE ---
+    Vector2 mouseDelta = GetMouseDelta();
+    float mouseSensitivity = 0.0038f;
 
-    // Bloquer l'angle vertical pour éviter que la caméra se retourne complètement
-    if (state->pitch > 1.2f) state->pitch = 1.2f;
-    if (state->pitch < -1.2f) state->pitch = -1.2f;
+    // Calcul des taux cibles basés sur la souris
+    float targetPitchRate = -mouseDelta.y * mouseSensitivity * 30.0f;
+    float targetYawRate   = -mouseDelta.x * mouseSensitivity * 30.0f;
 
-    // Tourner à gauche / droite (A / D) + incliner les ailes
-    if (IsKeyDown(controls->bindings[ACTION_LEFT])) {
-        state->yaw += turn_speed * dt;
-        target_roll = 0.6f; // Incline à gauche
-    }
-    if (IsKeyDown(controls->bindings[ACTION_RIGHT])) {
-        state->yaw -= turn_speed * dt;
-        target_roll = -0.6f; // Incline à droite
-    }
+    // BRIDAGE : Empêche l'avion de tourner instantanément à une vitesse folle lors d'un coup de souris brusque
+    float maxTurnRate = 2.0f; 
+    targetPitchRate = Clamp(targetPitchRate, -maxTurnRate, maxTurnRate);
+    targetYawRate   = Clamp(targetYawRate, -maxTurnRate, maxTurnRate);
 
-    // Transition fluide du roulis (les ailes reviennent à plat quand on lâche la touche)
-    state->roll += (target_roll - state->roll) * 8.0f * dt;
+    // Inertie / Lissage progressif (accélération et décélération des commandes)
+    static float currentPitchRate = 0.0f;
+    static float currentYawRate   = 0.0f;
+    float smoothing = 4.5f; // Plus c'est bas, plus l'avion est "lourd"
 
-    // Calcul du vecteur de direction 3D à partir des angles pitch et yaw
+    currentPitchRate += (targetPitchRate - currentPitchRate) * smoothing * dt;
+    currentYawRate   += (targetYawRate - currentYawRate) * smoothing * dt;
+
+    plane->pitch += currentPitchRate * dt;
+    plane->yaw   += currentYawRate * dt;
+
+    // Assistance clavier (A/D)
+    float turnSpeed = 1.2f;
+    if (IsKeyDown(controls->bindings[ACTION_LEFT]))  plane->yaw += turnSpeed * dt;
+    if (IsKeyDown(controls->bindings[ACTION_RIGHT])) plane->yaw -= turnSpeed * dt;
+
+    // Limite l'angle de piqué/cabré (~75 degrés max)
+    if (plane->pitch > 1.3f)  plane->pitch = 1.3f;
+    if (plane->pitch < -1.3f) plane->pitch = -1.3f;
+
+    // --- 2. ROULIS AUTOMATIQUE FLUIDE ---
+    float targetRoll = Clamp(currentYawRate * 0.7f, -0.85f, 0.85f);
+    if (IsKeyDown(controls->bindings[ACTION_LEFT]))  targetRoll =  0.85f;
+    if (IsKeyDown(controls->bindings[ACTION_RIGHT])) targetRoll =  -0.85f;
+
+    plane->roll += (targetRoll - plane->roll) * 4.0f * dt;
+
+    // --- 3. GESTION DE LA VITESSE ---
+    static float currentSpeed = 45.0f;
+    float targetSpeed = 45.0f;
+
+    if (IsKeyDown(controls->bindings[ACTION_UP]))   targetSpeed = 75.0f;
+    if (IsKeyDown(controls->bindings[ACTION_DOWN])) targetSpeed = 22.0f;
+
+    currentSpeed += (targetSpeed - currentSpeed) * 3.0f * dt;
+
+    // --- 4. DÉPLACEMENT 3D ---
     Vector3 forward = {
-        -cosf(state->pitch) * sinf(state->yaw),
-         sinf(state->pitch),
-        -cosf(state->pitch) * cosf(state->yaw)
+        -cosf(plane->pitch) * sinf(plane->yaw),
+        sinf(plane->pitch),
+        -cosf(plane->pitch) * cosf(plane->yaw)
     };
 
-    // Mise à jour de la vitesse et de la position
-    state->velocity.x = forward.x * state->speed;
-    state->velocity.y = forward.y * state->speed;
-    state->velocity.z = forward.z * state->speed;
-
-    state->position.x += state->velocity.x * dt;
-    state->position.y += state->velocity.y * dt;
-    state->position.z += state->velocity.z * dt;
+    plane->position.x += forward.x * currentSpeed * dt;
+    plane->position.y += forward.y * currentSpeed * dt;
+    plane->position.z += forward.z * currentSpeed * dt;
 }
 
 void UpdatePlaneCamera(Camera3D *camera, const PlayerState *state) {

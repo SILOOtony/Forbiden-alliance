@@ -10,11 +10,11 @@ typedef enum {
     ACTION_SLOT_1,
     ACTION_SLOT_2,
     ACTION_SLOT_3,
-    ACTION_COUNT 
-} GameAction;     
+    ACTION_COUNT  
+} GameAction;
 
 typedef struct {
-    int bindings[ACTION_COUNT];
+    KeyboardKey bindings[ACTION_COUNT];
 } KeyBindings;
 
 KeyBindings InitKeyBinds(void);

@@ -2,9 +2,10 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <string.h>
 
 #include "raylib.h"
-#include "string.h"
+#include "raymath.h"
 #include "map.h"
 #include "input.h"
 #include "playerMovment.h"
@@ -19,7 +20,7 @@
 #define TICK_DT (1.0f / TICK_RATE)
 
 int main(void) {
-    InitWindow(1280, 720, "Forbidden Alliance - Vol 3D (Multiplayer)");
+    InitWindow(1280, 720, "Forbidden Alliance - Vol 3D (5v5)");
     SetTargetFPS(60);
 
     // --- INITIALISATION RÉSEAU (UDP Non-Bloquant) ---
@@ -30,15 +31,19 @@ int main(void) {
     struct sockaddr_in serverAddr = { 0 };
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(SERVER_PORT);
-    inet_pton(AF_INET, "10.204.28.187", &serverAddr.sin_addr);
+    inet_pton(AF_INET, "157.173.112.67", &serverAddr.sin_addr);
 
     ServerPacket latestServerData = { 0 };
     latestServerData.your_id = -1;
 
+    // Tableaux locaux reconstruits depuis les Slim Packets pour l'affichage et les collisions
+    PlayerState remotePlayers[MAX_CLIENTS] = { 0 };
+    Projectile remoteProjectiles[MAX_PROJECTILES] = { 0 };
+
     // --- INITIALISATION DU JEU ---
     KeyBindings controls = InitKeyBinds();
     GameMap cityMap = { 0 };
-    InitMap(&cityMap, 133742); // Génère la ville dès le menu
+    InitMap(&cityMap, 133742);
 
     PlayerState plane;
     InitPlayerState(&plane);
@@ -60,6 +65,13 @@ int main(void) {
         float frameTime = GetFrameTime();
         if (frameTime > 0.25f) frameTime = 0.25f;
 
+        // --- GESTION DU CURSEUR DE LA SOURIS ---
+        if (status == STATUS_PLAYING && plane.is_alive) {
+            if (!IsCursorHidden()) DisableCursor();
+        } else {
+            if (IsCursorHidden()) EnableCursor();
+        }
+
         // --- 1. ENTRÉES INSTANTANÉES ---
         if (status == STATUS_PLAYING) {
             if (IsKeyPressed(KEY_P)) status = STATUS_PAUSED;
@@ -69,7 +81,14 @@ int main(void) {
                 if (IsKeyPressed(controls.bindings[ACTION_SLOT_2])) plane.current_slot = 1;
                 if (IsKeyPressed(controls.bindings[ACTION_SLOT_3])) plane.current_slot = 2;
 
-                if (IsKeyPressed(controls.bindings[ACTION_ATTACK])) {
+                float wheel = GetMouseWheelMove();
+                if (wheel > 0) {
+                    plane.current_slot = (plane.current_slot - 1 + MAX_WEAPON_SLOTS) % MAX_WEAPON_SLOTS;
+                } else if (wheel < 0) {
+                    plane.current_slot = (plane.current_slot + 1) % MAX_WEAPON_SLOTS;
+                }
+
+                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsKeyPressed(controls.bindings[ACTION_ATTACK])) {
                     SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE);
                 }
             } else {
@@ -101,42 +120,71 @@ int main(void) {
                 CheckProjectileMapCollisions(projectile, MAX_PLAYER_PROJECTILE, &cityMap);
                 CheckProjectileDroneCollisions(projectile, MAX_PLAYER_PROJECTILE, drones, MAX_DRONE_COUNT);
 
-                // Détection des impacts de nos projectiles sur les avions des autres joueurs
                 int damage_dealt[MAX_CLIENTS] = { 0 };
                 CheckProjectilePlayersCollisions(
                     projectile,
                     MAX_PLAYER_PROJECTILE,
-                    latestServerData.players,
+                    remotePlayers,
                     latestServerData.connected,
                     MAX_CLIENTS,
                     latestServerData.your_id,
                     damage_dealt
                 );
 
-                // --- ENVOI DE NOTRE POSITION, TIRS, DÉGÂTS ET BÂTIMENTS DÉTRUITS AU SERVEUR ---
-                ClientPacket outPacket = {
+                // --- COMPRESSION ET ENVOI DU SLIM PACKET AU SERVEUR ---
+                ClientPacket outPacket = { 0 };
+                outPacket.player = (NetPlayer){
                     .position = plane.position,
                     .pitch = plane.pitch,
                     .yaw = plane.yaw,
                     .roll = plane.roll,
-                    .hp = plane.hp,
-                    .is_alive = plane.is_alive
+                    .hp = (int16_t)plane.hp,
+                    .is_alive = plane.is_alive,
+                    .is_drone = false,
+                    .team = 0
                 };
-                memcpy(outPacket.projectiles, projectile, sizeof(outPacket.projectiles));
-                memcpy(outPacket.damage_dealt, damage_dealt, sizeof(outPacket.damage_dealt));
+
+                for (int i = 0; i < MAX_PLAYER_PROJECTILE; i++) {
+                    outPacket.projectiles[i] = (NetProjectile){
+                        .position = projectile[i].position,
+                        .type = (uint8_t)projectile[i].type,
+                        .active = projectile[i].active
+                    };
+                }
+
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    outPacket.damage_dealt[i] = (int16_t)damage_dealt[i];
+                }
 
                 for (int b = 0; b < cityMap.building_count; b++) {
                     outPacket.building_destroyed[b] = cityMap.buildings[b].is_destroyed;
                 }
+
                 sendto(netSocket, &outPacket, sizeof(outPacket), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
             }
 
-            // --- RÉCEPTION DES DONNÉES DU SERVEUR ---
+            // --- RÉCEPTION ET DÉCOMPRESSION DU SLIM PACKET SERVEUR ---
             ServerPacket inPacket;
             while (recvfrom(netSocket, &inPacket, sizeof(inPacket), 0, NULL, NULL) == sizeof(inPacket)) {
                 latestServerData = inPacket;
 
-                // Si un autre joueur nous a touché, on soustrait les dégâts reçus à nos HP
+                // Décompression des joueurs distants
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    remotePlayers[i].position = inPacket.players[i].position;
+                    remotePlayers[i].pitch    = inPacket.players[i].pitch;
+                    remotePlayers[i].yaw      = inPacket.players[i].yaw;
+                    remotePlayers[i].roll     = inPacket.players[i].roll;
+                    remotePlayers[i].hp       = inPacket.players[i].hp;
+                    remotePlayers[i].is_alive = inPacket.players[i].is_alive;
+                }
+
+                // Décompression des projectiles distants
+                for (int i = 0; i < MAX_PROJECTILES; i++) {
+                    remoteProjectiles[i].position = inPacket.projectiles[i].position;
+                    remoteProjectiles[i].type     = (WeaponType)inPacket.projectiles[i].type;
+                    remoteProjectiles[i].active   = inPacket.projectiles[i].active;
+                }
+
                 if (inPacket.damage_received > 0 && plane.is_alive) {
                     plane.hp -= inPacket.damage_received;
                     if (plane.hp <= 0) {
@@ -145,12 +193,10 @@ int main(void) {
                     }
                 }
 
-                // Si le serveur utilise une graine différente, on régénère la même carte que lui
                 if (cityMap.seed != latestServerData.map_seed && latestServerData.map_seed != 0) {
                     InitMap(&cityMap, latestServerData.map_seed);
                 }
 
-                // On met à jour les bâtiments détruits par les autres joueurs !
                 for (int b = 0; b < cityMap.building_count; b++) {
                     if (latestServerData.building_destroyed[b]) {
                         cityMap.buildings[b].is_destroyed = true;
@@ -177,24 +223,27 @@ int main(void) {
 
                     for (int i = 0; i < MAX_CLIENTS; i++) {
                         if (i == latestServerData.your_id) continue;
-                        if (latestServerData.connected[i] && latestServerData.players[i].is_alive) {
-                            DrawPlanePlayer(&latestServerData.players[i]);
-                            Vector3 markerPos = latestServerData.players[i].position;
+                        if (latestServerData.connected[i] && remotePlayers[i].is_alive) {
+                            DrawPlanePlayer(&remotePlayers[i]);
+                            Vector3 markerPos = remotePlayers[i].position;
                             markerPos.y += 4.0f;
-                            DrawSphere(markerPos, 1.2f, LIME);
+                            // Équipe 0 en Vert, Équipe 1 en Rouge !
+                            Color teamColor = (latestServerData.players[i].team == 0) ? LIME : RED;
+                            DrawSphere(markerPos, 1.2f, teamColor);
                         }
                     }
 
-                    DrawProjectiles(latestServerData.projectiles, MAX_PROJECTILES);
+                    DrawProjectiles(remoteProjectiles, MAX_PROJECTILES);
                 }
             EndMode3D();
 
             DrawFPS(10, 10);
 
             if (status == STATUS_PLAYING) {
-                DrawText("W/S: Pitch | A/D: Virer | 1/2/3: Armes | Shift: Tirer | P: Pause", 10, 40, 20, DARKBLUE);
+                DrawText("Souris: Voler | W/S: Vitesse | Clic Gauche: Tirer | Molette/1/2/3: Armes | P: Pause", 10, 40, 20, DARKBLUE);
                 if (latestServerData.your_id != -1) {
-                    DrawText(TextFormat("EN LIGNE - Joueur #%d", latestServerData.your_id), 10, 70, 20, DARKGREEN);
+                    int myTeam = (latestServerData.your_id < 5) ? 1 : 2;
+                    DrawText(TextFormat("EN LIGNE - Joueur #%d (Equipe %d)", latestServerData.your_id, myTeam), 10, 70, 20, DARKGREEN);
                 } else {
                     DrawText("HORS LIGNE (Lancez ./server)", 10, 70, 20, RED);
                 }
@@ -211,6 +260,7 @@ int main(void) {
         EndDrawing();
     }
 
+    if (IsCursorHidden()) EnableCursor();
     close(netSocket);
     CloseWindow();
     return 0;

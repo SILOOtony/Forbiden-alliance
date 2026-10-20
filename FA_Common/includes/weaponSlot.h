@@ -1,7 +1,5 @@
 #pragma once
-
 #include <stdbool.h>
-
 #define MAX_WEAPON_SLOTS 3
 
 typedef enum {
@@ -12,17 +10,14 @@ typedef enum {
 
 typedef struct {
     WeaponType type;
-    const char *name;       // Nom affiché sur le HUD
-    int ammo;               // Munitions actuelles
-    int max_ammo;           // Capacité du chargeur
-    float reload_time;      // Temps pour recharger 1 munition
-    float reload_timer;     // Chronomètre interne de l'arme
-    float projectile_speed; // Vitesse du missile tiré
-    int damage;             // Dégâts infligés à l'impact
+    const char *name;
+    int ammo;
+    int max_ammo;
+    float reload_time;
+    float reload_timer;
+    float projectile_speed;
+    int damage;
 } Weapon;
 
-// Initialise les 3 slots avec leurs statistiques respectives
 void InitWeaponSlots(Weapon slots[MAX_WEAPON_SLOTS]);
-
-// Recharge automatiquement toutes les armes qui ne sont pas pleines
 void UpdateWeaponsReload(Weapon slots[MAX_WEAPON_SLOTS], float dt);

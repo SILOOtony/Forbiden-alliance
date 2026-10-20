@@ -5,7 +5,7 @@ void InitProjectile(Projectile *projectile, const Weapon *weapon, const PlayerSt
     projectile->type = weapon->type;
     projectile->direction = (Vector3){
         -cosf(state->pitch) * sinf(state->yaw),
-         sinf(state->pitch),
+        sinf(state->pitch),
         -cosf(state->pitch) * cosf(state->yaw)
     };
     projectile->position = state->position;
