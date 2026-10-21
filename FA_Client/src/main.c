@@ -22,8 +22,8 @@
 int main(void) {
     InitWindow(1280, 720, "Forbidden Alliance - Vol 3D (5v5)");
     SetTargetFPS(60);
+    ToggleFullscreen();
 
-    // --- INITIALISATION RÉSEAU (UDP Non-Bloquant) ---
     int netSocket = socket(AF_INET, SOCK_DGRAM, 0);
     int flags = fcntl(netSocket, F_GETFL, 0);
     fcntl(netSocket, F_SETFL, flags | O_NONBLOCK);
@@ -36,11 +36,10 @@ int main(void) {
     ServerPacket latestServerData = { 0 };
     latestServerData.your_id = -1;
 
-    // Tableaux locaux reconstruits depuis les Slim Packets pour l'affichage et les collisions
     PlayerState remotePlayers[MAX_CLIENTS] = { 0 };
     Projectile remoteProjectiles[MAX_PROJECTILES] = { 0 };
+    bool local_drone_destroyed[MAX_DRONE_COUNT] = { 0 };
 
-    // --- INITIALISATION DU JEU ---
     KeyBindings controls = InitKeyBinds();
     GameMap cityMap = { 0 };
     InitMap(&cityMap, 133742);
@@ -65,7 +64,6 @@ int main(void) {
         float frameTime = GetFrameTime();
         if (frameTime > 0.25f) frameTime = 0.25f;
 
-        // --- GESTION DU CURSEUR DE LA SOURIS ---
         if (status == STATUS_PLAYING && plane.is_alive) {
             if (!IsCursorHidden()) DisableCursor();
         } else {
@@ -92,8 +90,20 @@ int main(void) {
                     SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE);
                 }
             } else {
+                // Réapparition en avion [R]
                 if (IsKeyPressed(KEY_R)) {
                     InitPlayerState(&plane);
+                }
+                // Réincarnation dans un drone [E]
+                if (IsKeyPressed(KEY_E)) {
+                    for (int d = 0; d < MAX_DRONE_COUNT; d++) {
+                        if (drones[d].is_alive) {
+                            drones[d].is_alive = false;
+                            local_drone_destroyed[d] = true;
+                            ReincarnateAsDrone(&plane, drones[d].pos);
+                            break;
+                        }
+                    }
                 }
             }
         } else if (status == STATUS_PAUSED) {
@@ -115,10 +125,19 @@ int main(void) {
                     CheckPlaneMapCollision(&plane, &cityMap);
                 }
 
-                UpdateDrones(drones, MAX_DRONE_COUNT, TICK_DT);
+                if (latestServerData.your_id == -1) {
+                    UpdateDrones(drones, MAX_DRONE_COUNT, TICK_DT);
+                }
+
                 UpdateProjectiles(projectile, MAX_PLAYER_PROJECTILE, TICK_DT);
                 CheckProjectileMapCollisions(projectile, MAX_PLAYER_PROJECTILE, &cityMap);
                 CheckProjectileDroneCollisions(projectile, MAX_PLAYER_PROJECTILE, drones, MAX_DRONE_COUNT);
+
+                for (int d = 0; d < MAX_DRONE_COUNT; d++) {
+                    if (!drones[d].is_alive) {
+                        local_drone_destroyed[d] = true;
+                    }
+                }
 
                 int damage_dealt[MAX_CLIENTS] = { 0 };
                 CheckProjectilePlayersCollisions(
@@ -140,7 +159,7 @@ int main(void) {
                     .roll = plane.roll,
                     .hp = (int16_t)plane.hp,
                     .is_alive = plane.is_alive,
-                    .is_drone = false,
+                    .is_drone = plane.is_drone,
                     .team = 0
                 };
 
@@ -160,6 +179,8 @@ int main(void) {
                     outPacket.building_destroyed[b] = cityMap.buildings[b].is_destroyed;
                 }
 
+                memcpy(outPacket.drone_destroyed, local_drone_destroyed, sizeof(local_drone_destroyed));
+
                 sendto(netSocket, &outPacket, sizeof(outPacket), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
             }
 
@@ -168,7 +189,6 @@ int main(void) {
             while (recvfrom(netSocket, &inPacket, sizeof(inPacket), 0, NULL, NULL) == sizeof(inPacket)) {
                 latestServerData = inPacket;
 
-                // Décompression des joueurs distants
                 for (int i = 0; i < MAX_CLIENTS; i++) {
                     remotePlayers[i].position = inPacket.players[i].position;
                     remotePlayers[i].pitch    = inPacket.players[i].pitch;
@@ -176,13 +196,18 @@ int main(void) {
                     remotePlayers[i].roll     = inPacket.players[i].roll;
                     remotePlayers[i].hp       = inPacket.players[i].hp;
                     remotePlayers[i].is_alive = inPacket.players[i].is_alive;
+                    remotePlayers[i].is_drone = inPacket.players[i].is_drone;
                 }
 
-                // Décompression des projectiles distants
                 for (int i = 0; i < MAX_PROJECTILES; i++) {
                     remoteProjectiles[i].position = inPacket.projectiles[i].position;
                     remoteProjectiles[i].type     = (WeaponType)inPacket.projectiles[i].type;
                     remoteProjectiles[i].active   = inPacket.projectiles[i].active;
+                }
+
+                for (int d = 0; d < MAX_DRONE_COUNT; d++) {
+                    drones[d].pos = inPacket.drones[d].pos;
+                    drones[d].is_alive = inPacket.drones[d].is_alive;
                 }
 
                 if (inPacket.damage_received > 0 && plane.is_alive) {
@@ -226,14 +251,17 @@ int main(void) {
                         if (latestServerData.connected[i] && remotePlayers[i].is_alive) {
                             DrawPlanePlayer(&remotePlayers[i]);
                             Vector3 markerPos = remotePlayers[i].position;
-                            markerPos.y += 4.0f;
-                            // Équipe 0 en Vert, Équipe 1 en Rouge !
+                            markerPos.y += 4.5f;
                             Color teamColor = (latestServerData.players[i].team == 0) ? LIME : RED;
                             DrawSphere(markerPos, 1.2f, teamColor);
                         }
                     }
 
-                    DrawProjectiles(remoteProjectiles, MAX_PROJECTILES);
+                    if (latestServerData.your_id != -1) {
+                        DrawProjectiles(remoteProjectiles, MAX_PROJECTILES);
+                    } else {
+                        DrawProjectiles(projectile, MAX_PLAYER_PROJECTILE);
+                    }
                 }
             EndMode3D();
 
@@ -243,9 +271,9 @@ int main(void) {
                 DrawText("Souris: Voler | W/S: Vitesse | Clic Gauche: Tirer | Molette/1/2/3: Armes | P: Pause", 10, 40, 20, DARKBLUE);
                 if (latestServerData.your_id != -1) {
                     int myTeam = (latestServerData.your_id < 5) ? 1 : 2;
-                    DrawText(TextFormat("EN LIGNE - Joueur #%d (Equipe %d)", latestServerData.your_id, myTeam), 10, 70, 20, DARKGREEN);
+                    DrawText(TextFormat("EN LIGNE - Joueur #%d (Equipe %d) [%s]", latestServerData.your_id, myTeam, plane.is_drone ? "DRONE" : "AVION"), 10, 70, 20, DARKGREEN);
                 } else {
-                    DrawText("HORS LIGNE (Lancez ./server)", 10, 70, 20, RED);
+                    DrawText(TextFormat("HORS LIGNE [%s]", plane.is_drone ? "DRONE" : "AVION"), 10, 70, 20, RED);
                 }
 
                 DrawWeaponSlots(&plane);

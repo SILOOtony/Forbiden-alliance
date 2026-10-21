@@ -1,11 +1,13 @@
 #pragma once
 #include <stdbool.h>
+
 #define MAX_WEAPON_SLOTS 3
 
 typedef enum {
     WEAPON_ROCKET = 0,
     WEAPON_AIR_TO_AIR = 1,
-    WEAPON_AIR_TO_GROUND = 2
+    WEAPON_AIR_TO_GROUND = 2,
+    WEAPON_DRONE_BLASTER = 3
 } WeaponType;
 
 typedef struct {

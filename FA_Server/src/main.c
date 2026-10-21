@@ -5,9 +5,12 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <time.h>
+#include <sys/time.h>
+#include <sys/select.h>
 
 #include "network.h"
+
+#define TICK_RATE 60
 
 typedef struct {
     struct sockaddr_in addr;
@@ -19,15 +22,19 @@ typedef struct {
 } ClientSlot;
 
 static double GetCurrentTimeSec(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
+}
+
+static bool IsSameClient(struct sockaddr_in a, struct sockaddr_in b) {
+    return (a.sin_addr.s_addr == b.sin_addr.s_addr) && (a.sin_port == b.sin_port);
 }
 
 int main(void) {
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0) {
-        perror("socket");
+        perror("Erreur creation socket");
         return 1;
     }
 
@@ -40,7 +47,7 @@ int main(void) {
     serverAddr.sin_port = htons(SERVER_PORT);
 
     if (bind(sock, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
-        perror("bind");
+        perror("Erreur bind (le port 8080 est peut-etre deja utilise)");
         close(sock);
         return 1;
     }
@@ -49,10 +56,11 @@ int main(void) {
     bool building_destroyed[MAX_BUILDINGS] = { 0 };
     unsigned int map_seed = 133742;
 
+    Drone drones[MAX_DRONE_COUNT];
+    SpawnDrones(drones, MAX_DRONE_COUNT);
+
     printf("=== Serveur Forbidden Alliance 5v5 demarre sur le port UDP %d ===\n", SERVER_PORT);
     printf("Taille ClientPacket : %zu octets | ServerPacket : %zu octets\n", sizeof(ClientPacket), sizeof(ServerPacket));
-
-    const double tick_dt = 1.0 / 60.0;
 
     while (1) {
         double now = GetCurrentTimeSec();
@@ -65,17 +73,13 @@ int main(void) {
         while (recvfrom(sock, &inPacket, sizeof(inPacket), 0, (struct sockaddr *)&senderAddr, &senderLen) == sizeof(inPacket)) {
             int slot = -1;
 
-            // Cherche si le client est déjà connecté
             for (int i = 0; i < MAX_CLIENTS; i++) {
-                if (clients[i].connected &&
-                    clients[i].addr.sin_addr.s_addr == senderAddr.sin_addr.s_addr &&
-                    clients[i].addr.sin_port == senderAddr.sin_port) {
+                if (clients[i].connected && IsSameClient(clients[i].addr, senderAddr)) {
                     slot = i;
                     break;
                 }
             }
 
-            // Sinon, lui attribue une place libre (0 à 4 = Équipe A, 5 à 9 = Équipe B)
             if (slot == -1) {
                 for (int i = 0; i < MAX_CLIENTS; i++) {
                     if (!clients[i].connected) {
@@ -95,25 +99,33 @@ int main(void) {
                 clients[slot].state.team = (slot < 5) ? 0 : 1;
                 memcpy(clients[slot].projectiles, inPacket.projectiles, sizeof(inPacket.projectiles));
 
-                // Cumul des dégâts infligés aux autres joueurs
                 for (int target = 0; target < MAX_CLIENTS; target++) {
                     if (inPacket.damage_dealt[target] > 0 && clients[target].connected) {
                         clients[target].pending_damage += inPacket.damage_dealt[target];
                     }
                 }
 
-                // Synchronisation des bâtiments détruits
                 for (int b = 0; b < MAX_BUILDINGS; b++) {
                     if (inPacket.building_destroyed[b]) {
                         building_destroyed[b] = true;
                     }
                 }
+
+                // Synchronisation des drones abattus ou utilisés pour réincarnation
+                for (int d = 0; d < MAX_DRONE_COUNT; d++) {
+                    if (inPacket.drone_destroyed[d]) {
+                        drones[d].is_alive = false;
+                    }
+                }
             }
         }
 
-        // --- 2. DÉCONNEXION DES JOUEURS INACTIFS (Timeout 5s) ---
+        // Simulation des 60 drones sur le serveur
+        UpdateDrones(drones, MAX_DRONE_COUNT, 1.0f / (float)TICK_RATE);
+
+        // --- 2. DÉCONNEXION DES JOUEURS INACTIFS (Timeout 15s) ---
         for (int i = 0; i < MAX_CLIENTS; i++) {
-            if (clients[i].connected && (now - clients[i].last_seen) > 5.0) {
+            if (clients[i].connected && (now - clients[i].last_seen) > 15.0) {
                 printf("[-] Joueur #%d deconnecte (timeout)\n", i);
                 clients[i].connected = false;
             }
@@ -123,6 +135,11 @@ int main(void) {
         ServerPacket outPacket = { 0 };
         outPacket.map_seed = map_seed;
         memcpy(outPacket.building_destroyed, building_destroyed, sizeof(building_destroyed));
+
+        for (int d = 0; d < MAX_DRONE_COUNT; d++) {
+            outPacket.drones[d].pos = drones[d].pos;
+            outPacket.drones[d].is_alive = drones[d].is_alive;
+        }
 
         for (int i = 0; i < MAX_CLIENTS; i++) {
             outPacket.connected[i] = clients[i].connected;
@@ -142,7 +159,9 @@ int main(void) {
             sendto(sock, &outPacket, sizeof(outPacket), 0, (struct sockaddr *)&clients[i].addr, sizeof(clients[i].addr));
         }
 
-        usleep((useconds_t)(tick_dt * 1000000.0));
+        // --- 4. PAUSE DE 1 TICK (16.6 ms = 60 Hz) ---
+        struct timeval sleepTime = { 0, 1000000 / TICK_RATE };
+        select(0, NULL, NULL, NULL, &sleepTime);
     }
 
     close(sock);

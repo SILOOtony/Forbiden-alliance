@@ -65,6 +65,7 @@ void DrawHpBar(const PlayerState *state) {
 
 void DrawDeathScreen(void) {
     DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), Fade(BLACK, 0.6f));
-    DrawText("VOUS ETES MORT (CRASH)", 380, 300, 40, RED);
-    DrawText("Appuyez sur [R] pour reapparaitre", 430, 360, 25, RAYWHITE);
+    DrawText("VOUS ETES MORT (CRASH)", 380, 280, 40, RED);
+    DrawText("Appuyez sur [E] pour vous reincarner dans un DRONE", 320, 340, 25, GOLD);
+    DrawText("Appuyez sur [R] pour reapparaitre en AVION", 370, 380, 22, RAYWHITE);
 }

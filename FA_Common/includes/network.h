@@ -3,13 +3,13 @@
 #include <stdint.h>
 #include "raylib.h"
 #include "map.h"
+#include "drone.h"
 
 #define SERVER_PORT 8080
 #define MAX_CLIENTS 10
 #define MAX_PLAYER_PROJECTILE 15
 #define MAX_PROJECTILES (MAX_CLIENTS * MAX_PLAYER_PROJECTILE)
 
-// Structure ultra-légère pour un joueur sur le réseau (32 octets au lieu de ~160)
 typedef struct {
     Vector3 position;
     float pitch;
@@ -21,12 +21,16 @@ typedef struct {
     uint8_t team;
 } NetPlayer;
 
-// Structure ultra-légère pour un projectile sur le réseau (16 octets au lieu de 48)
 typedef struct {
     Vector3 position;
     uint8_t type;
     bool active;
 } NetProjectile;
+
+typedef struct {
+    Vector3 pos;
+    bool is_alive;
+} NetDrone;
 
 // Paquet envoyé par le Client -> Serveur
 typedef struct {
@@ -34,6 +38,7 @@ typedef struct {
     NetProjectile projectiles[MAX_PLAYER_PROJECTILE];
     int16_t damage_dealt[MAX_CLIENTS];
     bool building_destroyed[MAX_BUILDINGS];
+    bool drone_destroyed[MAX_DRONE_COUNT];
 } ClientPacket;
 
 // Paquet envoyé par le Serveur -> Client
@@ -45,4 +50,5 @@ typedef struct {
     NetPlayer players[MAX_CLIENTS];
     NetProjectile projectiles[MAX_PROJECTILES];
     bool building_destroyed[MAX_BUILDINGS];
+    NetDrone drones[MAX_DRONE_COUNT];
 } ServerPacket;

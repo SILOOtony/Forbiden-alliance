@@ -2,7 +2,7 @@
 #include "raylib.h"
 #include <stdbool.h>
 
-#define MAX_DRONE_COUNT 80
+#define MAX_DRONE_COUNT 60
 
 typedef struct {
     int hp;

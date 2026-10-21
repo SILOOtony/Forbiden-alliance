@@ -7,8 +7,8 @@ void CheckProjectileMapCollisions(Projectile projectiles[], int maxProjectiles, 
 
         for (int j = 0; j < map->building_count; j++) {
             if (map->buildings[j].is_destroyed) continue;
-            BoundingBox buildingBox = { map->buildings[j].min, map->buildings[j].max };
 
+            BoundingBox buildingBox = { map->buildings[j].min, map->buildings[j].max };
             if (CheckCollisionBoxSphere(buildingBox, projectiles[i].position, 0.8f)) {
                 projectiles[i].active = false;
                 map->buildings[j].hp -= projectiles[i].damage;
@@ -28,7 +28,8 @@ void CheckProjectileDroneCollisions(Projectile projectiles[], int maxProjectiles
         for (int d = 0; d < maxDrones; d++) {
             if (!drones[d].is_alive) continue;
 
-            if (CheckCollisionSpheres(projectiles[i].position, 1.0f, drones[d].pos, 3.0f)) {
+            // Hitbox doublée : 6.0f au lieu de 3.0f
+            if (CheckCollisionSpheres(projectiles[i].position, 1.0f, drones[d].pos, 6.0f)) {
                 projectiles[i].active = false;
                 drones[d].hp -= projectiles[i].damage;
                 if (drones[d].hp <= 0) {
@@ -47,7 +48,8 @@ void CheckProjectilePlayersCollisions(Projectile projectiles[], int maxProjectil
         for (int p = 0; p < maxClients; p++) {
             if (p == my_id || !connected[p] || !players[p].is_alive) continue;
 
-            if (CheckCollisionSpheres(projectiles[i].position, 1.0f, players[p].position, 3.5f)) {
+            float targetRadius = players[p].is_drone ? 6.0f : 3.5f;
+            if (CheckCollisionSpheres(projectiles[i].position, 1.0f, players[p].position, targetRadius)) {
                 projectiles[i].active = false;
                 damage_dealt[p] += projectiles[i].damage;
                 break;
@@ -58,15 +60,19 @@ void CheckProjectilePlayersCollisions(Projectile projectiles[], int maxProjectil
 
 bool CheckPlaneMapCollision(PlayerState *state, GameMap *map) {
     if (!state->is_alive) return true;
+
     if (state->position.y <= 0.5f) {
         state->hp = 0;
         state->is_alive = false;
         return true;
     }
+
+    float selfRadius = state->is_drone ? 3.0f : 1.5f;
     for (int j = 0; j < map->building_count; j++) {
         if (map->buildings[j].is_destroyed) continue;
+
         BoundingBox buildingBox = { map->buildings[j].min, map->buildings[j].max };
-        if (CheckCollisionBoxSphere(buildingBox, state->position, 1.5f)) {
+        if (CheckCollisionBoxSphere(buildingBox, state->position, selfRadius)) {
             state->hp = 0;
             state->is_alive = false;
             map->buildings[j].hp -= 100;
