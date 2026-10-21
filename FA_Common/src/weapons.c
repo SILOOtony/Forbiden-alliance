@@ -17,21 +17,17 @@ void InitProjectile(Projectile *projectile, const Weapon *weapon, const PlayerSt
 }
 
 bool SpawnProjectile(PlayerState *state, Projectile projectiles[], int maxProjectiles) {
-    // On récupère un pointeur vers l'arme actuellement sélectionnée
     Weapon *currentWeapon = &state->weapons[state->current_slot];
-
     if (currentWeapon->ammo <= 0) {
-        return false; // Plus de munitions dans ce slot !
+        return false;
     }
 
     for (int i = 0; i < maxProjectiles; i++) {
         if (projectiles[i].active) continue;
-
         InitProjectile(&projectiles[i], currentWeapon, state);
-        currentWeapon->ammo--; // C'est l'arme du slot qui perd une munition
+        currentWeapon->ammo--;
         return true;
     }
-
     return false;
 }
 
@@ -66,6 +62,9 @@ void DrawProjectiles(const Projectile projectiles[], int maxProjectiles) {
             } 
             else if (projectiles[i].type == WEAPON_AIR_TO_GROUND) {
                 DrawSphere(projectiles[i].position, 1.4f, DARKGRAY);
+            }
+            else if (projectiles[i].type == WEAPON_DRONE_BLASTER) {
+                DrawSphere(projectiles[i].position, 0.4f, YELLOW);
             }
         }
     }

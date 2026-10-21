@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include "player.h"
 
-#define MAX_PROJECTILES 60
 #define MAX_PLAYER_PROJECTILE 15
 
 typedef struct {
