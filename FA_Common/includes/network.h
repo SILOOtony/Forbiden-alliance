@@ -6,9 +6,15 @@
 #include "drone.h"
 
 #define SERVER_PORT 8080
+#define MAX_ROOMS 4
 #define MAX_CLIENTS 10
 #define MAX_PLAYER_PROJECTILE 15
 #define MAX_PROJECTILES (MAX_CLIENTS * MAX_PLAYER_PROJECTILE)
+
+typedef enum {
+    PACKET_LOBBY = 1,
+    PACKET_GAME  = 2
+} PacketType;
 
 typedef struct {
     Vector3 position;
@@ -32,8 +38,22 @@ typedef struct {
     bool is_alive;
 } NetDrone;
 
-// Paquet envoyé par le Client -> Serveur
+// --- PAQUETS DE LOBBY (Ultra-légers pour le menu des salons) ---
 typedef struct {
+    uint8_t type;   // Toujours PACKET_LOBBY
+    int8_t action;  // 0 = Rafraîchir la liste des salons, 1 = Quitter le salon actuel
+    int8_t room_id;
+} LobbyClientPacket;
+
+typedef struct {
+    uint8_t type;   // Toujours PACKET_LOBBY
+    uint8_t room_players[MAX_ROOMS]; // Nombre de joueurs connectés par salon (0 à 10)
+} LobbyServerPacket;
+
+// --- PAQUETS DE PARTIE (Envoyés uniquement en jeu) ---
+typedef struct {
+    uint8_t type;   // Toujours PACKET_GAME
+    int8_t room_id; // Salon dans lequel joue le client (0 à MAX_ROOMS - 1)
     NetPlayer player;
     NetProjectile projectiles[MAX_PLAYER_PROJECTILE];
     int16_t damage_dealt[MAX_CLIENTS];
@@ -41,8 +61,9 @@ typedef struct {
     bool drone_destroyed[MAX_DRONE_COUNT];
 } ClientPacket;
 
-// Paquet envoyé par le Serveur -> Client
 typedef struct {
+    uint8_t type;   // Toujours PACKET_GAME
+    int8_t room_id;
     int8_t your_id;
     int16_t damage_received;
     unsigned int map_seed;

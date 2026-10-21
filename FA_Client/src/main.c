@@ -36,6 +36,10 @@ int main(void) {
     ServerPacket latestServerData = { 0 };
     latestServerData.your_id = -1;
 
+    uint8_t lobbyRoomPlayers[MAX_ROOMS] = { 0 };
+    int currentRoom = 0;
+    float lobbyRefreshTimer = 0.0f;
+
     PlayerState remotePlayers[MAX_CLIENTS] = { 0 };
     Projectile remoteProjectiles[MAX_PROJECTILES] = { 0 };
     bool local_drone_destroyed[MAX_DRONE_COUNT] = { 0 };
@@ -90,11 +94,9 @@ int main(void) {
                     SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE);
                 }
             } else {
-                // Réapparition en avion [R]
                 if (IsKeyPressed(KEY_R)) {
                     InitPlayerState(&plane);
                 }
-                // Réincarnation dans un drone [E]
                 if (IsKeyPressed(KEY_E)) {
                     for (int d = 0; d < MAX_DRONE_COUNT; d++) {
                         if (drones[d].is_alive) {
@@ -113,9 +115,23 @@ int main(void) {
         // --- 2. BOUCLE DE SIMULATION PAR TICKS (60 Hz) ---
         accumulator += frameTime;
         while (accumulator >= TICK_DT) {
-            if (status == STATUS_MENU) {
+            if (status == STATUS_MENU || status == STATUS_LOBBY) {
                 menuCameraAngle += 0.15f * TICK_DT;
                 UpdateMenuCamera(&camera, menuCameraAngle);
+
+                // Dans le lobby, on demande la liste des joueurs par salon toutes les 0.3s
+                if (status == STATUS_LOBBY) {
+                    lobbyRefreshTimer -= TICK_DT;
+                    if (lobbyRefreshTimer <= 0.0f) {
+                        LobbyClientPacket lobbyReq = {
+                            .type = PACKET_LOBBY,
+                            .action = 0,
+                            .room_id = (int8_t)currentRoom
+                        };
+                        sendto(netSocket, &lobbyReq, sizeof(lobbyReq), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
+                        lobbyRefreshTimer = 0.3f;
+                    }
+                }
             } 
             else if (status == STATUS_PLAYING) {
                 if (plane.is_alive) {
@@ -150,8 +166,10 @@ int main(void) {
                     damage_dealt
                 );
 
-                // --- COMPRESSION ET ENVOI DU SLIM PACKET AU SERVEUR ---
+                // --- ENVOI DU PAQUET DE PARTIE AU SALON CHOISI ---
                 ClientPacket outPacket = { 0 };
+                outPacket.type = PACKET_GAME;
+                outPacket.room_id = (int8_t)currentRoom;
                 outPacket.player = (NetPlayer){
                     .position = plane.position,
                     .pitch = plane.pitch,
@@ -184,47 +202,61 @@ int main(void) {
                 sendto(netSocket, &outPacket, sizeof(outPacket), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
             }
 
-            // --- RÉCEPTION ET DÉCOMPRESSION DU SLIM PACKET SERVEUR ---
-            ServerPacket inPacket;
-            while (recvfrom(netSocket, &inPacket, sizeof(inPacket), 0, NULL, NULL) == sizeof(inPacket)) {
-                latestServerData = inPacket;
+            // --- RÉCEPTION DES PAQUETS SERVEUR (LOBBY OU PARTIE) ---
+            uint8_t recvBuf[sizeof(ServerPacket)];
+            ssize_t received;
+            while ((received = recvfrom(netSocket, recvBuf, sizeof(recvBuf), 0, NULL, NULL)) > 0) {
+                uint8_t packetType = recvBuf[0];
 
-                for (int i = 0; i < MAX_CLIENTS; i++) {
-                    remotePlayers[i].position = inPacket.players[i].position;
-                    remotePlayers[i].pitch    = inPacket.players[i].pitch;
-                    remotePlayers[i].yaw      = inPacket.players[i].yaw;
-                    remotePlayers[i].roll     = inPacket.players[i].roll;
-                    remotePlayers[i].hp       = inPacket.players[i].hp;
-                    remotePlayers[i].is_alive = inPacket.players[i].is_alive;
-                    remotePlayers[i].is_drone = inPacket.players[i].is_drone;
+                if (packetType == PACKET_LOBBY && received == sizeof(LobbyServerPacket)) {
+                    LobbyServerPacket lobbyIn;
+                    memcpy(&lobbyIn, recvBuf, sizeof(LobbyServerPacket));
+                    memcpy(lobbyRoomPlayers, lobbyIn.room_players, sizeof(lobbyRoomPlayers));
                 }
+                else if (packetType == PACKET_GAME && received == sizeof(ServerPacket)) {
+                    ServerPacket inPacket;
+                    memcpy(&inPacket, recvBuf, sizeof(ServerPacket));
 
-                for (int i = 0; i < MAX_PROJECTILES; i++) {
-                    remoteProjectiles[i].position = inPacket.projectiles[i].position;
-                    remoteProjectiles[i].type     = (WeaponType)inPacket.projectiles[i].type;
-                    remoteProjectiles[i].active   = inPacket.projectiles[i].active;
-                }
+                    if (inPacket.room_id != currentRoom) continue;
+                    latestServerData = inPacket;
 
-                for (int d = 0; d < MAX_DRONE_COUNT; d++) {
-                    drones[d].pos = inPacket.drones[d].pos;
-                    drones[d].is_alive = inPacket.drones[d].is_alive;
-                }
-
-                if (inPacket.damage_received > 0 && plane.is_alive) {
-                    plane.hp -= inPacket.damage_received;
-                    if (plane.hp <= 0) {
-                        plane.hp = 0;
-                        plane.is_alive = false;
+                    for (int i = 0; i < MAX_CLIENTS; i++) {
+                        remotePlayers[i].position = inPacket.players[i].position;
+                        remotePlayers[i].pitch    = inPacket.players[i].pitch;
+                        remotePlayers[i].yaw      = inPacket.players[i].yaw;
+                        remotePlayers[i].roll     = inPacket.players[i].roll;
+                        remotePlayers[i].hp       = inPacket.players[i].hp;
+                        remotePlayers[i].is_alive = inPacket.players[i].is_alive;
+                        remotePlayers[i].is_drone = inPacket.players[i].is_drone;
                     }
-                }
 
-                if (cityMap.seed != latestServerData.map_seed && latestServerData.map_seed != 0) {
-                    InitMap(&cityMap, latestServerData.map_seed);
-                }
+                    for (int i = 0; i < MAX_PROJECTILES; i++) {
+                        remoteProjectiles[i].position = inPacket.projectiles[i].position;
+                        remoteProjectiles[i].type     = (WeaponType)inPacket.projectiles[i].type;
+                        remoteProjectiles[i].active   = inPacket.projectiles[i].active;
+                    }
 
-                for (int b = 0; b < cityMap.building_count; b++) {
-                    if (latestServerData.building_destroyed[b]) {
-                        cityMap.buildings[b].is_destroyed = true;
+                    for (int d = 0; d < MAX_DRONE_COUNT; d++) {
+                        drones[d].pos = inPacket.drones[d].pos;
+                        drones[d].is_alive = inPacket.drones[d].is_alive;
+                    }
+
+                    if (inPacket.damage_received > 0 && plane.is_alive) {
+                        plane.hp -= inPacket.damage_received;
+                        if (plane.hp <= 0) {
+                            plane.hp = 0;
+                            plane.is_alive = false;
+                        }
+                    }
+
+                    if (cityMap.seed != latestServerData.map_seed && latestServerData.map_seed != 0) {
+                        InitMap(&cityMap, latestServerData.map_seed);
+                    }
+
+                    for (int b = 0; b < cityMap.building_count; b++) {
+                        if (latestServerData.building_destroyed[b]) {
+                            cityMap.buildings[b].is_destroyed = true;
+                        }
                     }
                 }
             }
@@ -240,7 +272,7 @@ int main(void) {
                 DrawMap(&cityMap);
                 DrawDrones(drones, MAX_DRONE_COUNT);
 
-                if (status != STATUS_MENU) {
+                if (status == STATUS_PLAYING || status == STATUS_PAUSED) {
                     if (plane.is_alive) {
                         DrawPlanePlayer(&plane);
                         DrawCrossHair(&plane);
@@ -271,9 +303,11 @@ int main(void) {
                 DrawText("Souris: Voler | W/S: Vitesse | Clic Gauche: Tirer | Molette/1/2/3: Armes | P: Pause", 10, 40, 20, DARKBLUE);
                 if (latestServerData.your_id != -1) {
                     int myTeam = (latestServerData.your_id < 5) ? 1 : 2;
-                    DrawText(TextFormat("EN LIGNE - Joueur #%d (Equipe %d) [%s]", latestServerData.your_id, myTeam, plane.is_drone ? "DRONE" : "AVION"), 10, 70, 20, DARKGREEN);
+                    DrawText(TextFormat("SALON #%d - Joueur #%d (Equipe %d) [%s]",
+                             currentRoom + 1, latestServerData.your_id, myTeam, plane.is_drone ? "DRONE" : "AVION"),
+                             10, 70, 20, DARKGREEN);
                 } else {
-                    DrawText(TextFormat("HORS LIGNE [%s]", plane.is_drone ? "DRONE" : "AVION"), 10, 70, 20, RED);
+                    DrawText(TextFormat("HORS LIGNE - SALON #%d [%s]", currentRoom + 1, plane.is_drone ? "DRONE" : "AVION"), 10, 70, 20, RED);
                 }
 
                 DrawWeaponSlots(&plane);
@@ -282,8 +316,28 @@ int main(void) {
                 if (!plane.is_alive) {
                     DrawDeathScreen();
                 }
-            } else {
+            }
+            else if (status == STATUS_LOBBY) {
+                int selected = DrawLobby(&status, lobbyRoomPlayers);
+                if (selected != -1) {
+                    currentRoom = selected;
+                    latestServerData.your_id = -1;
+                    memset(local_drone_destroyed, 0, sizeof(local_drone_destroyed));
+                    memset(projectile, 0, sizeof(projectile));
+                    InitPlayerState(&plane);
+                    InitMap(&cityMap, 133742u + (unsigned int)(currentRoom * 1000));
+                    SpawnDrones(drones, MAX_DRONE_COUNT);
+                }
+            }
+            else {
+                GameStatus prevStatus = status;
                 DrawMenu(&status);
+                // Si le joueur clique sur "CHANGER DE SALON" depuis la pause, on prévient le serveur
+                if (prevStatus == STATUS_PAUSED && status == STATUS_LOBBY) {
+                    LobbyClientPacket leaveReq = { .type = PACKET_LOBBY, .action = 1, .room_id = (int8_t)currentRoom };
+                    sendto(netSocket, &leaveReq, sizeof(leaveReq), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
+                    latestServerData.your_id = -1;
+                }
             }
         EndDrawing();
     }
