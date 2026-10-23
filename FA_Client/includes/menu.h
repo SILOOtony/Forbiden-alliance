@@ -2,16 +2,31 @@
 #include "raylib.h"
 #include <stdbool.h>
 #include <stdint.h>
-#include "network.h"
 
 typedef enum {
     STATUS_MENU,
-    STATUS_LOBBY,
     STATUS_PLAYING,
     STATUS_PAUSED,
     STATUS_QUIT
 } GameStatus;
 
-void DrawMenu(GameStatus *status);
-int DrawLobby(GameStatus *status, const uint8_t room_players[MAX_ROOMS]);
+typedef enum {
+    MENU_CMD_NONE = 0,
+    MENU_CMD_CREATE_ROOM,
+    MENU_CMD_JOIN_ROOM,
+    MENU_CMD_LEAVE_ROOM,
+    MENU_CMD_START_GAME,
+    MENU_CMD_LOGIN,
+    MENU_CMD_SELECT_CLASS
+} MenuCommand;
+
+MenuCommand DrawMenu(
+    GameStatus *status,
+    int currentRoom,
+    uint8_t connectedCount,
+    int *outJoinRoomId,
+    char *username,
+    bool accountLoaded,
+    uint8_t *selectedClass
+);
 void UpdateMenuCamera(Camera3D *camera, float angle);

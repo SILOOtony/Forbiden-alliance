@@ -18,6 +18,7 @@ void InitMap(GameMap *map, unsigned int seed) {
     FA_SetSeed(seed);
 
     map->building_count = 0;
+    map->total_max_hp = 0;
     map->ground_size = (Vector2){ 2000.0f, 2000.0f };
 
     int grid_size = 14;
@@ -56,11 +57,34 @@ void InitMap(GameMap *map, unsigned int seed) {
             int tint = FA_GetRandomValue(100, 180);
             b->color = (Color){ tint, tint, tint + 15, 255 };
             b->hp = (int)(height * 2);
-            b->is_destroyed = ((int)height % 3 == 0);
+            b->max_hp = b->hp;
+            b->is_destroyed = false;
 
+            map->total_max_hp += b->max_hp;
             map->building_count++;
         }
     }
+}
+
+int GetCityRemainingBuildings(const GameMap *map) {
+    int count = 0;
+    for (int i = 0; i < map->building_count; i++) {
+        if (!map->buildings[i].is_destroyed && map->buildings[i].hp > 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+float GetCityHpPercent(const GameMap *map) {
+    if (map->total_max_hp <= 0) return 0.0f;
+    int current_hp = 0;
+    for (int i = 0; i < map->building_count; i++) {
+        if (!map->buildings[i].is_destroyed && map->buildings[i].hp > 0) {
+            current_hp += map->buildings[i].hp;
+        }
+    }
+    return ((float)current_hp * 100.0f) / (float)map->total_max_hp;
 }
 
 #ifndef SERVER_BUILD

@@ -10,11 +10,22 @@
 #define MAX_CLIENTS 10
 #define MAX_PLAYER_PROJECTILE 15
 #define MAX_PROJECTILES (MAX_CLIENTS * MAX_PLAYER_PROJECTILE)
+#define ROUND_DURATION_SEC 180.0f
+#define MAX_USERNAME_LEN 24
 
 typedef enum {
     PACKET_LOBBY = 1,
     PACKET_GAME  = 2
 } PacketType;
+
+typedef enum {
+    LOBBY_CREATE    = 1,
+    LOBBY_JOIN      = 2,
+    LOBBY_HEARTBEAT = 3,
+    LOBBY_LEAVE     = 4,
+    LOBBY_LOGIN     = 5, // Charge ou crée le fichier JSON du joueur sur le VPS
+    LOBBY_SET_CLASS = 6  // Sauvegarde la nouvelle classe d'avion dans le JSON sur le VPS
+} LobbyAction;
 
 typedef struct {
     Vector3 position;
@@ -25,6 +36,7 @@ typedef struct {
     bool is_alive;
     bool is_drone;
     uint8_t team;
+    uint8_t plane_class;
 } NetPlayer;
 
 typedef struct {
@@ -38,38 +50,51 @@ typedef struct {
     bool is_alive;
 } NetDrone;
 
-// --- PAQUETS DE LOBBY (Ultra-légers pour le menu des salons) ---
+// --- PAQUETS DE ROOM & COMPTE JSON ---
 typedef struct {
-    uint8_t type;   // Toujours PACKET_LOBBY
-    int8_t action;  // 0 = Rafraîchir la liste des salons, 1 = Quitter le salon actuel
+    uint8_t type;
+    uint8_t action;
     int8_t room_id;
+    uint8_t plane_class;
+    char username[MAX_USERNAME_LEN];
 } LobbyClientPacket;
 
 typedef struct {
-    uint8_t type;   // Toujours PACKET_LOBBY
-    uint8_t room_players[MAX_ROOMS]; // Nombre de joueurs connectés par salon (0 à 10)
+    uint8_t type;
+    int8_t room_id;
+    uint8_t connected_count;
+    uint8_t plane_class;
+    bool account_loaded;
+    char username[MAX_USERNAME_LEN];
 } LobbyServerPacket;
 
-// --- PAQUETS DE PARTIE (Envoyés uniquement en jeu) ---
+// --- PAQUETS DE PARTIE (5v5) ---
 typedef struct {
-    uint8_t type;   // Toujours PACKET_GAME
-    int8_t room_id; // Salon dans lequel joue le client (0 à MAX_ROOMS - 1)
+    uint8_t type;
+    int8_t room_id;
     NetPlayer player;
     NetProjectile projectiles[MAX_PLAYER_PROJECTILE];
     int16_t damage_dealt[MAX_CLIENTS];
-    bool building_destroyed[MAX_BUILDINGS];
+    int16_t building_damage_dealt[MAX_BUILDINGS];
     bool drone_destroyed[MAX_DRONE_COUNT];
 } ClientPacket;
 
 typedef struct {
-    uint8_t type;   // Toujours PACKET_GAME
+    uint8_t type;
     int8_t room_id;
     int8_t your_id;
+    uint8_t connected_count;
     int16_t damage_received;
     unsigned int map_seed;
+
+    uint8_t current_round;
+    uint16_t round_time_left;
+    uint16_t team_buildings_destroyed[2];
+    uint32_t team_city_damage[2];
+
     bool connected[MAX_CLIENTS];
     NetPlayer players[MAX_CLIENTS];
     NetProjectile projectiles[MAX_PROJECTILES];
-    bool building_destroyed[MAX_BUILDINGS];
+    int16_t building_hp[MAX_BUILDINGS];
     NetDrone drones[MAX_DRONE_COUNT];
 } ServerPacket;

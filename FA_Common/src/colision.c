@@ -1,7 +1,7 @@
 #include "colision.h"
 #include "raylib.h"
 
-void CheckProjectileMapCollisions(Projectile projectiles[], int maxProjectiles, GameMap *map) {
+void CheckProjectileMapCollisions(Projectile projectiles[], int maxProjectiles, GameMap *map, bool is_attacker, int16_t building_damage_dealt[]) {
     for (int i = 0; i < maxProjectiles; i++) {
         if (!projectiles[i].active) continue;
 
@@ -11,9 +11,17 @@ void CheckProjectileMapCollisions(Projectile projectiles[], int maxProjectiles, 
             BoundingBox buildingBox = { map->buildings[j].min, map->buildings[j].max };
             if (CheckCollisionBoxSphere(buildingBox, projectiles[i].position, 0.8f)) {
                 projectiles[i].active = false;
-                map->buildings[j].hp -= projectiles[i].damage;
-                if (map->buildings[j].hp <= 0) {
-                    map->buildings[j].is_destroyed = true;
+
+                // Seuls les Attaquants peuvent endommager les bâtiments de la ville !
+                if (is_attacker) {
+                    int dmg = projectiles[i].damage;
+                    if (dmg > map->buildings[j].hp) dmg = map->buildings[j].hp;
+                    map->buildings[j].hp -= dmg;
+                    building_damage_dealt[j] += (int16_t)dmg;
+                    if (map->buildings[j].hp <= 0) {
+                        map->buildings[j].hp = 0;
+                        map->buildings[j].is_destroyed = true;
+                    }
                 }
                 break;
             }
@@ -21,14 +29,15 @@ void CheckProjectileMapCollisions(Projectile projectiles[], int maxProjectiles, 
     }
 }
 
-void CheckProjectileDroneCollisions(Projectile projectiles[], int maxProjectiles, Drone drones[], int maxDrones) {
+void CheckProjectileDroneCollisions(Projectile projectiles[], int maxProjectiles, Drone drones[], int maxDrones, bool player_is_attacker) {
     for (int i = 0; i < maxProjectiles; i++) {
         if (!projectiles[i].active) continue;
 
         for (int d = 0; d < maxDrones; d++) {
             if (!drones[d].is_alive) continue;
+            // Pas de tir ami sur les drones de son propre camp
+            if (drones[d].is_attacker == player_is_attacker) continue;
 
-            // Hitbox doublée : 6.0f au lieu de 3.0f
             if (CheckCollisionSpheres(projectiles[i].position, 1.0f, drones[d].pos, 6.0f)) {
                 projectiles[i].active = false;
                 drones[d].hp -= projectiles[i].damage;
@@ -41,12 +50,14 @@ void CheckProjectileDroneCollisions(Projectile projectiles[], int maxProjectiles
     }
 }
 
-void CheckProjectilePlayersCollisions(Projectile projectiles[], int maxProjectiles, PlayerState players[], const bool connected[], int maxClients, int my_id, int damage_dealt[]) {
+void CheckProjectilePlayersCollisions(Projectile projectiles[], int maxProjectiles, PlayerState players[], const bool connected[], int maxClients, int my_id, uint8_t my_team, int damage_dealt[]) {
     for (int i = 0; i < maxProjectiles; i++) {
         if (!projectiles[i].active) continue;
 
         for (int p = 0; p < maxClients; p++) {
             if (p == my_id || !connected[p] || !players[p].is_alive) continue;
+            // Pas de tir ami entre joueurs de la même équipe
+            if (players[p].team == my_team) continue;
 
             float targetRadius = players[p].is_drone ? 6.0f : 3.5f;
             if (CheckCollisionSpheres(projectiles[i].position, 1.0f, players[p].position, targetRadius)) {
@@ -58,7 +69,7 @@ void CheckProjectilePlayersCollisions(Projectile projectiles[], int maxProjectil
     }
 }
 
-bool CheckPlaneMapCollision(PlayerState *state, GameMap *map) {
+bool CheckPlaneMapCollision(PlayerState *state, GameMap *map, int16_t building_damage_dealt[]) {
     if (!state->is_alive) return true;
 
     if (state->position.y <= 0.5f) {
@@ -75,8 +86,18 @@ bool CheckPlaneMapCollision(PlayerState *state, GameMap *map) {
         if (CheckCollisionBoxSphere(buildingBox, state->position, selfRadius)) {
             state->hp = 0;
             state->is_alive = false;
-            map->buildings[j].hp -= 100;
-            if (map->buildings[j].hp <= 0) map->buildings[j].is_destroyed = true;
+
+            // Si c'est un Attaquant qui se crashe sur un immeuble, il lui inflige des dégâts
+            if (state->is_attacker) {
+                int dmg = 100;
+                if (dmg > map->buildings[j].hp) dmg = map->buildings[j].hp;
+                map->buildings[j].hp -= dmg;
+                building_damage_dealt[j] += (int16_t)dmg;
+                if (map->buildings[j].hp <= 0) {
+                    map->buildings[j].hp = 0;
+                    map->buildings[j].is_destroyed = true;
+                }
+            }
             return true;
         }
     }

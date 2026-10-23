@@ -1,7 +1,6 @@
 #include "drone.h"
 #include <math.h>
 
-// Générateur aléatoire pur C pour que le serveur compile sans Raylib
 static unsigned int drone_rng_state = 98765;
 
 static int Drone_GetRandomValue(int min, int max) {
@@ -11,7 +10,7 @@ static int Drone_GetRandomValue(int min, int max) {
     return min + (int)(rand_val % (unsigned int)(max - min + 1));
 }
 
-void InitDrone(Drone *drone) {
+void InitDrone(Drone *drone, bool is_attacker) {
     drone->hp = 100;
     drone->ammo = 30;
     drone->max_ammo = 30;
@@ -26,12 +25,15 @@ void InitDrone(Drone *drone) {
     float randomAngle = (float)Drone_GetRandomValue(0, 360) * DEG2RAD;
     drone->direction = (Vector3){ cosf(randomAngle), 0.0f, sinf(randomAngle) };
     drone->is_alive = true;
+    drone->is_attacker = is_attacker;
 }
 
 void SpawnDrones(Drone drones[], int max_drone_count) {
     drone_rng_state = 98765;
     for (int i = 0; i < max_drone_count; i++) {
-        InitDrone(&drones[i]);
+        // Les 40 premiers sont Défenseurs, les 20 suivants sont Attaquants
+        bool is_attacker = (i >= DEFENDER_DRONE_COUNT);
+        InitDrone(&drones[i], is_attacker);
     }
 }
 
@@ -55,9 +57,10 @@ void UpdateDrones(Drone drones[], int max_drone_count, float dt) {
 void DrawDrones(const Drone drones[], int max_drone_count) {
     for (int i = 0; i < max_drone_count; i++) {
         if (!drones[i].is_alive) continue;
-        // Taille doublée : 10.0f x 4.0f x 10.0f (au lieu de 5.0f x 2.0f x 5.0f)
-        DrawCube(drones[i].pos, 10.0f, 4.0f, 10.0f, MAROON);
-        DrawCubeWires(drones[i].pos, 10.0f, 4.0f, 10.0f, RED);
+        Color bodyColor = drones[i].is_attacker ? MAROON : DARKBLUE;
+        Color wireColor = drones[i].is_attacker ? RED : SKYBLUE;
+        DrawCube(drones[i].pos, 10.0f, 4.0f, 10.0f, bodyColor);
+        DrawCubeWires(drones[i].pos, 10.0f, 4.0f, 10.0f, wireColor);
     }
 }
 #endif

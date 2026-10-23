@@ -1,0 +1,86 @@
+================================================================================
+          FORBIDDEN ALLIANCE - FEUILLE DE ROUTE & CONSOLIDATION TECHNIQUE
+================================================================================
+
+PHASE 1 : NOS 5 ÉTAPES FONDAMENTALES (PRIORITÉ ABSOLUE)
+--------------------------------------------------------------------------------
+[X] Étape 1 : Gameplay de base
+    - Pilotage souris avec inertie, roulis automatique et gestion de vitesse.
+    - Tir au clic gauche (3 slots d'armes avec rechargement).
+    - Réincarnation en drone armé (touche [E]) à la mort de l'avion.
+
+[X] Étape 2 : Réseau 5v5 & Slim Packets
+    - Allègement des structures réseau (NetPlayer, NetProjectile, NetDrone).
+    - Support de 10 joueurs (5v5), 150 projectiles et 60 drones synchronisés.
+    - Générateur aléatoire déterministe en pur C (LCG) pour la carte et les drones.
+
+[X] Étape 3 : Multi-Rooms & Lobby
+    - Séparation des paquets de Lobby (PACKET_LOBBY) et de Jeu (PACKET_GAME).
+    - Serveur gérant 4 salons virtuels simultanés avec réinitialisation auto.
+    - Menu de sélection de salon affichant le nombre de joueurs en direct.
+
+[ ] Étape 4 : Règles 5v5 (Attaque / Défense de ville)
+    - Attribution claire des rôles : Équipe Défense (Ville + Drones alliés) vs Équipe Attaque.
+    - Barre de vie globale de la ville (calculée sur les bâtiments restants).
+    - Condition de victoire / défaite, chronomètre de manche et écran de fin de partie.
+
+[ ] Étape 5 : Progression & Contenu
+    - Cartes inspirées de villes réelles.
+    - Classes d'avions (Chasseur léger, Intercepteur, Bombardier lourd).
+    - Système d'XP, niveaux, déblocage d'armes et skins d'avions.
+
+
+================================================================================
+PHASE 2 : TOUT CE QU'ON DOIT FAIRE EN PLUS (CONSOLIDATION & VERSION COMMERCIALE)
+================================================================================
+
+1. INDÉPENDANCE TOTALE DU SERVEUR (ZÉRO HEADER RAYLIB SUR LE VPS) (server authoritaire);
+--------------------------------------------------------------------------------
+- [ ] Créer un fichier "fa_types.h" contenant les définitions minimalistes de 
+      Vector2, Vector3, Color et BoundingBox lorsque SERVER_BUILD est activé.
+- [ ] Retirer l'obligation d'avoir "raylib.h" installé sur le VPS Linux pour 
+      compiler le binaire "./server".
+
+2. CADENCE SERVEUR EXACTE (FIXED TIMESTEP ACCUMULATOR)
+--------------------------------------------------------------------------------
+- [ ] Remplacer le simple select() fixe de 16.6 ms par une boucle à accumulateur 
+      de temps réel (delta-time), exactement comme sur le client.
+- [ ] Mesurer le temps exact pris par le traitement des paquets et la physique 
+      pour soustraire ce temps de la pause et garantir un 60 Hz mathématiquement parfait.
+
+3. BLINDAGE DU PROTOCOLE RÉSEAU UDP
+--------------------------------------------------------------------------------
+- [ ] Alignement mémoire strict : Ajouter "#pragma pack(push, 1)" sur tous les 
+      paquets réseau pour garantir que Mac (ARM64), Linux (x86_64) et Windows 
+      lisent exactement les mêmes octets sans décalage (padding).
+- [ ] Numéros de séquence (Sequence Numbers) : Ajouter un compteur uint32_t sur 
+      chaque paquet pour ignorer les paquets UDP qui arrivent dans le désordre.
+- [ ] Interpolation des joueurs distants : Lisser la position des avions ennemis 
+      entre deux paquets reçus pour éviter tout micro-téléportement si un joueur 
+      a une connexion instable.
+
+4. PASSAGE AU SERVEUR AUTORITAIRE (ANTI-TRICHE POUR LE MODE RANKED)
+--------------------------------------------------------------------------------
+- [ ] Validation des mouvements : Le client envoie ses intentions/angles et le 
+      serveur vérifie que la vitesse maximale de l'avion ou du drone est respectée.
+- [ ] Calcul des collisions côté serveur : Déplacer CheckProjectilePlayersCollisions, 
+      CheckProjectileMapCollisions et CheckPlaneMapCollision directement dans la 
+      boucle du serveur.
+- [ ] Autorité sur la vie et les munitions : C'est le serveur qui décrémente les 
+      HP, valide qu'un joueur a bien des munitions avant de créer un missile, et 
+      autorise la réincarnation dans un drone libre.
+
+5. PERSISTANCE DES DONNÉES & COMPTES JOUEURS
+--------------------------------------------------------------------------------
+- [ ] Système d'identifiant / pseudo joueur affiché au-dessus des avions.
+- [ ] Sauvegarde côté serveur (fichier binaire ou SQLite) de l'XP, des victoires, 
+      du rang ( Elo / MMR ) et des skins débloqués par chaque joueur.
+
+6. HABILLAGE VISUEL, MODÈLES 3D & AUDIO (POLISH)
+--------------------------------------------------------------------------------
+- [ ] Remplacer les cubes de prototypage par de vrais modèles 3D (.obj / .glb) 
+      pour les classes d'avions, les drones et les immeubles.
+- [ ] Ajouter des effets visuels (particules de fumée, explosions des bâtiments, 
+      traînées de réacteurs).
+- [ ] Intégrer le son 3D avec Raylib Audio (bruit de réacteur, tirs, explosions, 
+      alerte de verrouillage missile).

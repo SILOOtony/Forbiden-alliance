@@ -1,5 +1,4 @@
 #pragma once
-
 #include "raylib.h"
 #include <stdbool.h>
 
@@ -12,15 +11,19 @@ typedef struct {
     Vector3 max;
     Color color;
     int hp;
+    int max_hp;
     bool is_destroyed;
 } Building;
 
 typedef struct {
     Building buildings[MAX_BUILDINGS];
     int building_count;
+    int total_max_hp;
     Vector2 ground_size;
-    unsigned int seed; // La graine qui a généré cette carte
+    unsigned int seed;
 } GameMap;
 
 void InitMap(GameMap *map, unsigned int seed);
+int GetCityRemainingBuildings(const GameMap *map);
+float GetCityHpPercent(const GameMap *map);
 void DrawMap(const GameMap *map);

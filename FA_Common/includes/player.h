@@ -1,6 +1,7 @@
 #pragma once
 #include "raylib.h"
 #include <stdbool.h>
+#include <stdint.h>
 #include "weaponSlot.h"
 
 typedef struct {
@@ -18,8 +19,13 @@ typedef struct {
     float pitch, yaw, roll;
     float speed;
     int hp;
+    int max_hp;
     bool is_alive;
-    bool is_drone;                    // true si le joueur est réincarné en drone
+    bool is_drone;
+    uint8_t team;
+    uint8_t plane_class;      // 0 = Chasseur, 1 = Intercepteur, 2 = Bombardier
+    bool is_attacker;
+    int plane_respawns_left;
     Weapon weapons[MAX_WEAPON_SLOTS];
     int current_slot;
 } PlayerState;
