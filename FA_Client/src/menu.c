@@ -4,6 +4,8 @@
 #include "raylib.h"
 #include "weaponSlot.h"
 #include "network.h"
+#include <ctype.h>
+
 
 static bool isTypingCode = false;
 static bool isEditingUsername = false;
