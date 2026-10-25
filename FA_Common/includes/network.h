@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include "fa_types.h"
 #include "map.h"
 #include "drone.h"
@@ -23,11 +24,26 @@ typedef enum {
     LOBBY_JOIN      = 2,
     LOBBY_HEARTBEAT = 3,
     LOBBY_LEAVE     = 4,
-    LOBBY_LOGIN     = 5, // Charge ou crée le fichier JSON du joueur sur le VPS
-    LOBBY_SET_CLASS = 6  // Sauvegarde la nouvelle classe d'avion dans le JSON sur le VPS
+    LOBBY_LOGIN     = 5,
+    LOBBY_SET_CLASS = 6
 } LobbyAction;
 
-// Alignement mémoire strict au bit/octet près entre macOS (ARM64) et Linux (x86_64)
+typedef enum {
+    RESPAWN_NONE  = 0,
+    RESPAWN_PLANE = 1, // Touche [R]
+    RESPAWN_DRONE = 2  // Touche [E]
+} RespawnCommand;
+
+static inline int16_t QuantizeCoord(float v) {
+    if (v > 3200.0f) v = 3200.0f;
+    if (v < -3200.0f) v = -3200.0f;
+    return (int16_t)(v * 10.0f);
+}
+
+static inline float DequantizeCoord(int16_t q) {
+    return (float)q / 10.0f;
+}
+
 #pragma pack(push, 1)
 
 typedef struct {
@@ -40,19 +56,25 @@ typedef struct {
     bool is_drone;
     uint8_t team;
     uint8_t plane_class;
+    uint8_t respawns_left;
+    char username[16];
 } NetPlayer;
 
 typedef struct {
-    Vector3 position;
-    uint8_t type;
-    bool active;
+    int16_t x;
+    int16_t y;
+    int16_t z;
+    uint8_t type_and_active;
 } NetProjectile;
 
 typedef struct {
-    Vector3 pos;
-    bool is_alive;
-    Vector3 bullet_pos;
-    bool bullet_active;
+    int16_t x;
+    int16_t y;
+    int16_t z;
+    int16_t bx;
+    int16_t by;
+    int16_t bz;
+    uint8_t flags;
 } NetDrone;
 
 // --- PAQUETS DE ROOM & COMPTE JSON ---
@@ -70,18 +92,24 @@ typedef struct {
     uint8_t connected_count;
     uint8_t plane_class;
     bool account_loaded;
+    int32_t xp;
+    int32_t gems;
     char username[MAX_USERNAME_LEN];
 } LobbyServerPacket;
 
-// --- PAQUETS DE PARTIE (5v5) ---
+// --- PAQUET CLIENT AUTORITAIRE (Ultra-léger : ~61 octets au lieu de 722 !) ---
 typedef struct {
     uint8_t type;
     int8_t room_id;
-    NetPlayer player;
-    NetProjectile projectiles[MAX_PLAYER_PROJECTILE];
-    int16_t damage_dealt[MAX_CLIENTS];
-    int16_t building_damage_dealt[MAX_BUILDINGS];
-    bool drone_destroyed[MAX_DRONE_COUNT];
+    uint32_t seq;
+    Vector3 position;
+    float pitch;
+    float yaw;
+    float roll;
+    uint8_t plane_class;
+    uint8_t fire_slot;    // 0 = aucun tir, 1..3 = demande de tir sur le slot 1, 2 ou 3
+    uint8_t respawn_cmd;  // 0 = rien, 1 = [R] Avion, 2 = [E] Drone
+    char username[16];
 } ClientPacket;
 
 typedef struct {
@@ -89,7 +117,7 @@ typedef struct {
     int8_t room_id;
     int8_t your_id;
     uint8_t connected_count;
-    int16_t damage_received;
+    uint32_t seq;
     unsigned int map_seed;
 
     uint8_t current_round;
@@ -99,9 +127,13 @@ typedef struct {
 
     bool connected[MAX_CLIENTS];
     NetPlayer players[MAX_CLIENTS];
-    NetProjectile projectiles[MAX_PROJECTILES];
-    int16_t building_hp[MAX_BUILDINGS];
+    uint8_t building_hp[MAX_BUILDINGS];
     NetDrone drones[MAX_DRONE_COUNT];
+
+    uint8_t active_projectile_count;
+    NetProjectile projectiles[MAX_PROJECTILES];
 } ServerPacket;
 
 #pragma pack(pop)
+
+#define SERVER_PACKET_BASE_SIZE offsetof(ServerPacket, projectiles)

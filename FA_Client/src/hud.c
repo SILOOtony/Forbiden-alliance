@@ -26,7 +26,8 @@ void DrawWeaponSlots(PlayerState *state) {
         Weapon *w = &state->weapons[i];
         Rectangle slotRect = { (float)(startX + i * (slotWidth + spacing)), (float)startY, (float)slotWidth, (float)slotHeight };
 
-        if (CheckCollisionPointRec(mousePos, slotRect) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        // Empêche le clic de tir en vol de cliquer sur les slots quand le curseur est masqué
+        if (!IsCursorHidden() && CheckCollisionPointRec(mousePos, slotRect) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             state->current_slot = i;
         }
 
@@ -73,7 +74,6 @@ void DrawCityTopBar(const GameMap *map, uint8_t currentRound, uint16_t timeLeft,
     float pct = GetCityHpPercent(map);
     int remaining = GetCityRemainingBuildings(map);
 
-    // Barre de vie globale de la ville
     DrawRectangle(barX, barY, barW, barH, Fade(BLACK, 0.75f));
     int fillW = (int)((pct / 100.0f) * (float)barW);
     Color barColor = (pct > 50.0f) ? LIME : ((pct > 25.0f) ? ORANGE : RED);
@@ -84,7 +84,6 @@ void DrawCityTopBar(const GameMap *map, uint8_t currentRound, uint16_t timeLeft,
     int txtW = MeasureText(cityTxt, 20);
     DrawText(cityTxt, barX + (barW - txtW) / 2, barY + 5, 20, WHITE);
 
-    // Manche, chrono et rôle du joueur juste en dessous
     int mins = timeLeft / 60;
     int secs = timeLeft % 60;
     const char *roleTxt = isAttacker ? "ROLE : ATTAQUANT (Detruisez la ville !)" : "ROLE : DEFENSEUR (Protegez la ville !)";
@@ -121,8 +120,7 @@ void DrawMatchEndScreen(const uint16_t buildingsDestroyed[2], const uint32_t cit
     const char *title = "FIN DE LA PARTIE (2 MANCHES)";
     DrawText(title, (screenW - MeasureText(title, 44)) / 2, 160, 44, GOLD);
 
-    // Détermination du vainqueur : Bâtiments détruits d'abord, puis Dégâts en cas d'égalité
-    int winner = -1; // -1 = Égalité parfaite
+    int winner = -1;
     if (buildingsDestroyed[0] > buildingsDestroyed[1]) winner = 0;
     else if (buildingsDestroyed[1] > buildingsDestroyed[0]) winner = 1;
     else if (cityDamage[0] > cityDamage[1]) winner = 0;

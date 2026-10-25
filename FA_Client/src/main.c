@@ -22,7 +22,7 @@
 int main(void) {
     InitWindow(1280, 720, "Forbidden Alliance - Vol 3D (5v5)");
     SetTargetFPS(60);
-    ToggleFullscreen();
+   
 
     int netSocket = socket(AF_INET, SOCK_DGRAM, 0);
     int flags = fcntl(netSocket, F_GETFL, 0);
@@ -38,19 +38,28 @@ int main(void) {
     latestServerData.current_round = 1;
     latestServerData.round_time_left = (uint16_t)ROUND_DURATION_SEC;
 
+    uint32_t clientSeq = 0;
+    uint32_t lastServerSeq = 0;
+
     int currentRoom = -1;
     uint8_t connectedInRoom = 0;
     float roomHeartbeatTimer = 0.0f;
     uint8_t localRound = 1;
 
-    // Compte JSON et Classe d'avion sélectionnée
     char username[MAX_USERNAME_LEN] = "tony";
     bool accountLoaded = false;
     uint8_t selectedClass = PLANE_FIGHTER;
+    int accountXp = 0;
+    int accountGems = 0;
+
+    uint8_t pendingFireSlot = 0;
+    uint8_t pendingRespawnCmd = RESPAWN_NONE;
 
     PlayerState remotePlayers[MAX_CLIENTS] = { 0 };
+    Vector3 remoteTargetPos[MAX_CLIENTS] = { 0 };
+    bool remoteHasTarget[MAX_CLIENTS] = { 0 };
+
     Projectile remoteProjectiles[MAX_PROJECTILES] = { 0 };
-    bool local_drone_destroyed[MAX_DRONE_COUNT] = { 0 };
 
     KeyBindings controls = InitKeyBinds();
     GameMap cityMap = { 0 };
@@ -63,7 +72,6 @@ int main(void) {
     plane.plane_respawns_left = 3;
     InitPlayerState(&plane);
 
-    // Demande automatiquement au VPS de charger/créer le profil JSON au lancement
     LobbyClientPacket initLogin = {
         .type = PACKET_LOBBY,
         .action = LOBBY_LOGIN,
@@ -113,23 +121,28 @@ int main(void) {
                 }
 
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsKeyPressed(controls.bindings[ACTION_ATTACK]) || IsKeyPressed(KEY_SPACE)) {
-                    SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE);
+                    if (SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE)) {
+                        pendingFireSlot = (uint8_t)(plane.current_slot + 1);
+                    }
                 }
             } else if (!plane.is_alive && latestServerData.current_round <= 2) {
                 if (plane.plane_respawns_left > 0) {
                     if (IsKeyPressed(KEY_R)) {
+                        pendingRespawnCmd = RESPAWN_PLANE;
                         plane.plane_respawns_left--;
                         plane.plane_class = selectedClass;
+                        memset(projectile, 0, sizeof(projectile));
                         InitPlayerState(&plane);
                     }
                 } else {
                     if (IsKeyPressed(KEY_E)) {
+                        pendingRespawnCmd = RESPAWN_DRONE;
                         int startIdx = plane.is_attacker ? DEFENDER_DRONE_COUNT : 0;
                         int endIdx   = plane.is_attacker ? MAX_DRONE_COUNT : DEFENDER_DRONE_COUNT;
                         for (int d = startIdx; d < endIdx; d++) {
                             if (drones[d].is_alive) {
                                 drones[d].is_alive = false;
-                                local_drone_destroyed[d] = true;
+                                memset(projectile, 0, sizeof(projectile));
                                 ReincarnateAsDrone(&plane, drones[d].pos);
                                 break;
                             }
@@ -164,71 +177,47 @@ int main(void) {
                 }
             } 
             else if (status == STATUS_PLAYING || status == STATUS_PAUSED) {
-                int16_t building_damage_dealt[MAX_BUILDINGS] = { 0 };
+                int16_t dummy_bldg_dmg[MAX_BUILDINGS] = { 0 };
 
                 if (status == STATUS_PLAYING && plane.is_alive && latestServerData.current_round <= 2) {
                     UpdatePlayerMovement(&plane, &controls, TICK_DT);
                     UpdatePlaneCamera(&camera, &plane);
                     UpdateWeaponsReload(plane.weapons, TICK_DT);
-                    CheckPlaneMapCollision(&plane, &cityMap, building_damage_dealt);
+                    CheckPlaneMapCollision(&plane, &cityMap, dummy_bldg_dmg);
                 }
+
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    if (i != latestServerData.your_id && latestServerData.connected[i] && remotePlayers[i].is_alive && remoteHasTarget[i]) {
+                        remotePlayers[i].position = Vector3Lerp(remotePlayers[i].position, remoteTargetPos[i], 0.35f);
+                    }
+                }
+
+                // Toujours mettre à jour les projectiles locaux pour libérer les 15 slots !
+                UpdateProjectiles(projectile, MAX_PLAYER_PROJECTILE, TICK_DT);
+                CheckProjectileMapCollisions(projectile, MAX_PLAYER_PROJECTILE, &cityMap, plane.is_attacker, dummy_bldg_dmg);
+                CheckProjectileDroneCollisions(projectile, MAX_PLAYER_PROJECTILE, drones, MAX_DRONE_COUNT, plane.is_attacker);
 
                 if (latestServerData.your_id == -1) {
                     UpdateDrones(drones, MAX_DRONE_COUNT, &cityMap, NULL, NULL, TICK_DT);
                 }
 
-                UpdateProjectiles(projectile, MAX_PLAYER_PROJECTILE, TICK_DT);
-                CheckProjectileMapCollisions(projectile, MAX_PLAYER_PROJECTILE, &cityMap, plane.is_attacker, building_damage_dealt);
-                CheckProjectileDroneCollisions(projectile, MAX_PLAYER_PROJECTILE, drones, MAX_DRONE_COUNT, plane.is_attacker);
-
-                for (int d = 0; d < MAX_DRONE_COUNT; d++) {
-                    if (!drones[d].is_alive) {
-                        local_drone_destroyed[d] = true;
-                    }
-                }
-
-                int damage_dealt[MAX_CLIENTS] = { 0 };
-                CheckProjectilePlayersCollisions(
-                    projectile,
-                    MAX_PLAYER_PROJECTILE,
-                    remotePlayers,
-                    latestServerData.connected,
-                    MAX_CLIENTS,
-                    latestServerData.your_id,
-                    plane.team,
-                    damage_dealt
-                );
-
-                // --- ENVOI DU PAQUET DE JEU ---
-                ClientPacket outPacket = { 0 };
-                outPacket.type = PACKET_GAME;
-                outPacket.room_id = (int8_t)currentRoom;
-                outPacket.player = (NetPlayer){
+                // --- ENVOI DU PAQUET CLIENT AUTORITAIRE (61 octets) ---
+                clientSeq++;
+                ClientPacket outPacket = {
+                    .type = PACKET_GAME,
+                    .room_id = (int8_t)currentRoom,
+                    .seq = clientSeq,
                     .position = plane.position,
                     .pitch = plane.pitch,
                     .yaw = plane.yaw,
                     .roll = plane.roll,
-                    .hp = (int16_t)plane.hp,
-                    .is_alive = plane.is_alive,
-                    .is_drone = plane.is_drone,
-                    .team = plane.team,
-                    .plane_class = plane.plane_class
+                    .plane_class = selectedClass,
+                    .fire_slot = pendingFireSlot,
+                    .respawn_cmd = pendingRespawnCmd
                 };
-
-                for (int i = 0; i < MAX_PLAYER_PROJECTILE; i++) {
-                    outPacket.projectiles[i] = (NetProjectile){
-                        .position = projectile[i].position,
-                        .type = (uint8_t)projectile[i].type,
-                        .active = projectile[i].active
-                    };
-                }
-
-                for (int i = 0; i < MAX_CLIENTS; i++) {
-                    outPacket.damage_dealt[i] = (int16_t)damage_dealt[i];
-                }
-
-                memcpy(outPacket.building_damage_dealt, building_damage_dealt, sizeof(building_damage_dealt));
-                memcpy(outPacket.drone_destroyed, local_drone_destroyed, sizeof(local_drone_destroyed));
+                strncpy(outPacket.username, username, sizeof(outPacket.username) - 1);
+                pendingFireSlot = 0;
+                pendingRespawnCmd = RESPAWN_NONE;
 
                 sendto(netSocket, &outPacket, sizeof(outPacket), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
             }
@@ -249,17 +238,25 @@ int main(void) {
                         accountLoaded = true;
                         selectedClass = lobbyIn.plane_class;
                         plane.plane_class = selectedClass;
+                        accountXp = lobbyIn.xp;
+                        accountGems = lobbyIn.gems;
                         strncpy(username, lobbyIn.username, MAX_USERNAME_LEN - 1);
                     }
                 }
-                else if (packetType == PACKET_GAME && received == sizeof(ServerPacket)) {
-                    ServerPacket inPacket;
-                    memcpy(&inPacket, recvBuf, sizeof(ServerPacket));
+                else if (packetType == PACKET_GAME && received >= (ssize_t)SERVER_PACKET_BASE_SIZE) {
+                    ServerPacket inPacket = { 0 };
+                    memcpy(&inPacket, recvBuf, (size_t)received);
 
-                    if (currentRoom == -1) {
-                        currentRoom = inPacket.room_id;
+                    size_t expectedSize = SERVER_PACKET_BASE_SIZE + (size_t)inPacket.active_projectile_count * sizeof(NetProjectile);
+                    if ((size_t)received != expectedSize || inPacket.active_projectile_count > MAX_PROJECTILES) {
+                        continue;
                     }
+
+                    if (currentRoom == -1) currentRoom = inPacket.room_id;
                     if (inPacket.room_id != currentRoom) continue;
+
+                    if (inPacket.seq <= lastServerSeq && (lastServerSeq - inPacket.seq) < 100000u) continue;
+                    lastServerSeq = inPacket.seq;
 
                     uint8_t prevTeam = plane.team;
                     bool prevAttacker = plane.is_attacker;
@@ -276,25 +273,45 @@ int main(void) {
                         InitPlayerState(&plane);
                     }
 
+                    if (inPacket.your_id >= 0 && inPacket.your_id < MAX_CLIENTS && inPacket.current_round <= 2) {
+                        NetPlayer me = inPacket.players[inPacket.your_id];
+                        plane.hp = me.hp;
+                        plane.is_alive = me.is_alive;
+                        plane.plane_respawns_left = me.respawns_left;
+                        if (me.is_drone && !plane.is_drone) {
+                            ReincarnateAsDrone(&plane, me.position);
+                        }
+                    }
+
                     if (cityMap.seed != inPacket.map_seed && inPacket.map_seed != 0) {
                         InitMap(&cityMap, inPacket.map_seed);
                     }
 
                     if (inPacket.current_round != localRound) {
                         localRound = inPacket.current_round;
-                        memset(local_drone_destroyed, 0, sizeof(local_drone_destroyed));
                         memset(projectile, 0, sizeof(projectile));
+                        memset(remoteHasTarget, 0, sizeof(remoteHasTarget));
                         if (localRound <= 2) {
                             InitMap(&cityMap, inPacket.map_seed);
                             SpawnDrones(drones, MAX_DRONE_COUNT);
                             plane.plane_class = selectedClass;
                             InitPlayerState(&plane);
                             plane.plane_respawns_left = 3;
+                        } else if (localRound == 3) {
+                            LobbyClientPacket req = { .type = PACKET_LOBBY, .action = LOBBY_LOGIN, .room_id = (int8_t)currentRoom, .plane_class = selectedClass };
+                            strncpy(req.username, username, MAX_USERNAME_LEN - 1);
+                            sendto(netSocket, &req, sizeof(req), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
                         }
                     }
 
                     for (int i = 0; i < MAX_CLIENTS; i++) {
-                        remotePlayers[i].position    = inPacket.players[i].position;
+                        Vector3 netPos = inPacket.players[i].position;
+                        float distSq = Vector3DistanceSqr(remotePlayers[i].position, netPos);
+                        if (!remoteHasTarget[i] || !inPacket.players[i].is_alive || distSq > 2500.0f) {
+                            remotePlayers[i].position = netPos;
+                            remoteHasTarget[i] = inPacket.players[i].is_alive;
+                        }
+                        remoteTargetPos[i]           = netPos;
                         remotePlayers[i].pitch       = inPacket.players[i].pitch;
                         remotePlayers[i].yaw         = inPacket.players[i].yaw;
                         remotePlayers[i].roll        = inPacket.players[i].roll;
@@ -306,29 +323,38 @@ int main(void) {
                     }
 
                     for (int i = 0; i < MAX_PROJECTILES; i++) {
-                        remoteProjectiles[i].position = inPacket.projectiles[i].position;
-                        remoteProjectiles[i].type     = (WeaponType)inPacket.projectiles[i].type;
-                        remoteProjectiles[i].active   = inPacket.projectiles[i].active;
+                        if (i < (int)inPacket.active_projectile_count) {
+                            NetProjectile np = inPacket.projectiles[i];
+                            remoteProjectiles[i].position = (Vector3){
+                                DequantizeCoord(np.x),
+                                DequantizeCoord(np.y),
+                                DequantizeCoord(np.z)
+                            };
+                            remoteProjectiles[i].type   = (WeaponType)(np.type_and_active & 0x7F);
+                            remoteProjectiles[i].active = ((np.type_and_active & 0x80) != 0);
+                        } else {
+                            remoteProjectiles[i].active = false;
+                        }
                     }
 
                     for (int d = 0; d < MAX_DRONE_COUNT; d++) {
-                        drones[d].pos = inPacket.drones[d].pos;
-                        drones[d].is_alive = inPacket.drones[d].is_alive;
-                        drones[d].bullet_pos = inPacket.drones[d].bullet_pos;
-                        drones[d].bullet_active = inPacket.drones[d].bullet_active;
+                        drones[d].pos = (Vector3){
+                            DequantizeCoord(inPacket.drones[d].x),
+                            DequantizeCoord(inPacket.drones[d].y),
+                            DequantizeCoord(inPacket.drones[d].z)
+                        };
+                        drones[d].bullet_pos = (Vector3){
+                            DequantizeCoord(inPacket.drones[d].bx),
+                            DequantizeCoord(inPacket.drones[d].by),
+                            DequantizeCoord(inPacket.drones[d].bz)
+                        };
+                        drones[d].is_alive      = ((inPacket.drones[d].flags & 0x01) != 0);
+                        drones[d].bullet_active = ((inPacket.drones[d].flags & 0x02) != 0);
                     }
 
                     for (int b = 0; b < cityMap.building_count; b++) {
-                        cityMap.buildings[b].hp = inPacket.building_hp[b];
-                        cityMap.buildings[b].is_destroyed = (inPacket.building_hp[b] <= 0);
-                    }
-
-                    if (inPacket.damage_received > 0 && plane.is_alive) {
-                        plane.hp -= inPacket.damage_received;
-                        if (plane.hp <= 0) {
-                            plane.hp = 0;
-                            plane.is_alive = false;
-                        }
+                        cityMap.buildings[b].hp = (int)inPacket.building_hp[b];
+                        cityMap.buildings[b].is_destroyed = (inPacket.building_hp[b] == 0);
                     }
                 }
             }
@@ -369,6 +395,24 @@ int main(void) {
                 }
             EndMode3D();
 
+            if (status == STATUS_PLAYING || status == STATUS_PAUSED) {
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    if (i == latestServerData.your_id) continue;
+                    if (latestServerData.connected[i] && remotePlayers[i].is_alive) {
+                        Vector3 tagPos = remotePlayers[i].position;
+                        tagPos.y += 7.5f;
+                        Vector2 screenPos = GetWorldToScreen(tagPos, camera);
+                        if (screenPos.x > 0 && screenPos.x < GetScreenWidth() && screenPos.y > 0 && screenPos.y < GetScreenHeight()) {
+                            const char *pName = latestServerData.players[i].username;
+                            int tw = MeasureText(pName, 16);
+                            Color col = (latestServerData.players[i].team == 0) ? LIME : RED;
+                            DrawRectangle((int)screenPos.x - tw / 2 - 4, (int)screenPos.y - 2, tw + 8, 20, Fade(BLACK, 0.6f));
+                            DrawText(pName, (int)screenPos.x - tw / 2, (int)screenPos.y, 16, col);
+                        }
+                    }
+                }
+            }
+
             DrawFPS(10, 10);
 
             if (status == STATUS_PLAYING) {
@@ -378,8 +422,8 @@ int main(void) {
                                     ((plane.plane_class == PLANE_BOMBER) ? "BOMBARDIER" : "CHASSEUR");
 
                 if (latestServerData.your_id != -1) {
-                    DrawText(TextFormat(" Pilote: %s | ROOM #%d (%d/10) | Equipe %d [%s]",
-                             username, currentRoom + 1, connectedInRoom, plane.team + 1,
+                    DrawText(TextFormat("Pilote: %s (XP:%d | Gems:%d) | ROOM #%d (%d/10) | Equipe %d [%s]",
+                             username, accountXp, accountGems, currentRoom + 1, connectedInRoom, plane.team + 1,
                              plane.is_drone ? "DRONE" : cName), 10, 80, 18, DARKGREEN);
                 } else {
                     DrawText(TextFormat("HORS LIGNE | Pilote: %s [%s]", username, plane.is_drone ? "DRONE" : cName), 10, 80, 18, RED);
@@ -397,7 +441,8 @@ int main(void) {
                 }
             } else {
                 int joinRoomId = -1;
-                MenuCommand cmd = DrawMenu(&status, currentRoom, connectedInRoom, &joinRoomId, username, accountLoaded, &selectedClass);
+                MenuCommand cmd = DrawMenu(&status, currentRoom, connectedInRoom, &joinRoomId,
+                                           username, accountLoaded, &selectedClass, accountXp, accountGems);
 
                 if (cmd == MENU_CMD_LOGIN) {
                     accountLoaded = false;
@@ -428,12 +473,14 @@ int main(void) {
                     currentRoom = -1;
                     connectedInRoom = 0;
                     latestServerData.your_id = -1;
+                    lastServerSeq = 0;
                 }
                 else if (cmd == MENU_CMD_START_GAME) {
                     latestServerData.your_id = -1;
+                    lastServerSeq = 0;
                     localRound = 1;
-                    memset(local_drone_destroyed, 0, sizeof(local_drone_destroyed));
                     memset(projectile, 0, sizeof(projectile));
+                    memset(remoteHasTarget, 0, sizeof(remoteHasTarget));
                     plane.plane_class = selectedClass;
                     plane.plane_respawns_left = 3;
                     InitPlayerState(&plane);

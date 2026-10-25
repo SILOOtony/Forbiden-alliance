@@ -27,6 +27,8 @@ MenuCommand DrawMenu(
     int *outJoinRoomId,
     char *username,
     bool accountLoaded,
-    uint8_t *selectedClass
+    uint8_t *selectedClass,
+    int accountXp,
+    int accountGems
 );
 void UpdateMenuCamera(Camera3D *camera, float angle);

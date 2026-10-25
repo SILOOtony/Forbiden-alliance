@@ -1,11 +1,10 @@
 #include "menu.h"
 #include <math.h>
 #include <string.h>
+#include <ctype.h>
 #include "raylib.h"
 #include "weaponSlot.h"
 #include "network.h"
-#include <ctype.h>
-
 
 static bool isTypingCode = false;
 static bool isEditingUsername = false;
@@ -51,22 +50,22 @@ MenuCommand DrawMenu(
     int *outJoinRoomId,
     char *username,
     bool accountLoaded,
-    uint8_t *selectedClass
+    uint8_t *selectedClass,
+    int accountXp,
+    int accountGems
 ) {
     MenuCommand cmd = MENU_CMD_NONE;
     int screenW = GetScreenWidth();
 
     DrawRectangle(0, 0, screenW, GetScreenHeight(), Fade(BLACK, 0.6f));
 
-    // Titre principal
     const char *title = "FORBIDDEN ALLIANCE";
     int titleSize = 54;
     int titleWidth = MeasureText(title, titleSize);
     int titleX = (screenW - titleWidth) / 2;
-    DrawText(title, titleX + 4, 28, titleSize, BLACK);
-    DrawText(title, titleX, 24, titleSize, GOLD);
+    DrawText(title, titleX + 4, 24, titleSize, BLACK);
+    DrawText(title, titleX, 20, titleSize, GOLD);
 
-    // --- MENU PAUSE EN PLEINE PARTIE ---
     if (*status == STATUS_PAUSED) {
         if (DrawCenteredButton("REPRENDRE LA PARTIE", 260.0f, 340, 55, 22, DARKBLUE, SKYBLUE)) {
             *status = STATUS_PLAYING;
@@ -81,14 +80,14 @@ MenuCommand DrawMenu(
         return cmd;
     }
 
-    // --- 1. BARRE DE COMPTE JOUEUR (JSON VPS) ---
-    Rectangle accBox = { (float)(screenW - 620) / 2.0f, 92.0f, 620.0f, 58.0f };
+    // --- 1. BARRE DE COMPTE JOUEUR (JSON VPS + NIVEAU / XP / GEMMES) ---
+    Rectangle accBox = { (float)(screenW - 620) / 2.0f, 82.0f, 620.0f, 75.0f };
     DrawRectangleRec(accBox, Fade(BLACK, 0.75f));
     DrawRectangleLinesEx(accBox, 2.0f, accountLoaded ? LIME : GOLD);
 
-    DrawText("IDENTIFIANT :", (int)accBox.x + 15, (int)accBox.y + 19, 18, LIGHTGRAY);
+    DrawText("IDENTIFIANT :", (int)accBox.x + 15, (int)accBox.y + 14, 18, LIGHTGRAY);
 
-    Rectangle inputRect = { accBox.x + 155.0f, accBox.y + 10.0f, 230.0f, 38.0f };
+    Rectangle inputRect = { accBox.x + 155.0f, accBox.y + 6.0f, 230.0f, 34.0f };
     Vector2 mousePos = GetMousePosition();
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         isEditingUsername = CheckCollisionPointRec(mousePos, inputRect);
@@ -96,7 +95,7 @@ MenuCommand DrawMenu(
 
     DrawRectangleRec(inputRect, isEditingUsername ? DARKBLUE : DARKGRAY);
     DrawRectangleLinesEx(inputRect, 2.0f, isEditingUsername ? GOLD : GRAY);
-    DrawText(TextFormat("%s%s", username, isEditingUsername ? "_" : ""), (int)inputRect.x + 10, (int)inputRect.y + 9, 20, WHITE);
+    DrawText(TextFormat("%s%s", username, isEditingUsername ? "_" : ""), (int)inputRect.x + 10, (int)inputRect.y + 7, 20, WHITE);
 
     if (isEditingUsername) {
         int key = GetCharPressed();
@@ -118,15 +117,19 @@ MenuCommand DrawMenu(
         }
     }
 
-    Rectangle loginBtn = { accBox.x + 400.0f, accBox.y + 10.0f, 205.0f, 38.0f };
+    Rectangle loginBtn = { accBox.x + 400.0f, accBox.y + 6.0f, 205.0f, 34.0f };
     const char *loginLabel = accountLoaded ? "COMPTE SYNCHRONISE" : "CHARGER / CREER JSON";
     if (DrawButtonRect(loginLabel, loginBtn, 15, accountLoaded ? DARKGREEN : DARKBLUE, SKYBLUE)) {
         isEditingUsername = false;
         cmd = MENU_CMD_LOGIN;
     }
 
+    int level = 1 + (accountXp / 200);
+    const char *progTxt = TextFormat("NIVEAU %d   |   XP : %d   |   GEMMES : %d", level, accountXp, accountGems);
+    DrawText(progTxt, (screenW - MeasureText(progTxt, 18)) / 2, (int)accBox.y + 48, 18, GOLD);
+
     // --- 2. SÉLECTION DES 3 CLASSES D'AVIONS ---
-    DrawText("CHOISISSEZ VOTRE CLASSE D'AVION :", (screenW - MeasureText("CHOISISSEZ VOTRE CLASSE D'AVION :", 20)) / 2, 165, 20, GOLD);
+    DrawText("CHOISISSEZ VOTRE CLASSE D'AVION :", (screenW - MeasureText("CHOISISSEZ VOTRE CLASSE D'AVION :", 20)) / 2, 168, 20, GOLD);
 
     const char *classNames[3] = { "1. CHASSEUR", "2. INTERCEPTEUR", "3. BOMBARDIER" };
     const char *classStats[3] = {
@@ -137,20 +140,18 @@ MenuCommand DrawMenu(
 
     float classStartX = (float)(screenW - 620) / 2.0f;
     for (int c = 0; c < 3; c++) {
-        Rectangle cBtn = { classStartX + c * 210.0f, 192.0f, 200.0f, 48.0f };
+        Rectangle cBtn = { classStartX + c * 210.0f, 195.0f, 200.0f, 48.0f };
         bool isSel = (*selectedClass == (uint8_t)c);
         Color baseCol = isSel ? DARKGREEN : DARKGRAY;
         if (DrawButtonRect(classNames[c], cBtn, 18, baseCol, LIME)) {
             *selectedClass = (uint8_t)c;
             cmd = MENU_CMD_SELECT_CLASS;
         }
-        if (isSel) {
-            DrawRectangleLinesEx(cBtn, 3.0f, GOLD);
-        }
+        if (isSel) DrawRectangleLinesEx(cBtn, 3.0f, GOLD);
     }
 
     const char *statLine = classStats[*selectedClass];
-    DrawText(statLine, (screenW - MeasureText(statLine, 18)) / 2, 248, 18, SKYBLUE);
+    DrawText(statLine, (screenW - MeasureText(statLine, 18)) / 2, 250, 18, SKYBLUE);
 
     // --- 3. ENCADRÉ D'ÉQUIPE / ROOM ---
     Rectangle roomBox = { (float)(screenW - 500) / 2.0f, 280.0f, 500.0f, 82.0f };
@@ -171,7 +172,7 @@ MenuCommand DrawMenu(
         DrawText(subTxt, (screenW - MeasureText(subTxt, 14)) / 2, 328, 14, GRAY);
     }
 
-    // --- 4. BOUTON PRINCIPAL : PRÊT (LANCER LA GAME) ---
+    // --- 4. BOUTON PRINCIPAL : PRÊT ---
     const char *readyLabel = (currentRoom != -1) ? "PRET (LANCER LA ROOM)" : "PRET (REJOINDRE UNE PARTIE)";
     if (DrawCenteredButton(readyLabel, 378.0f, 380, 54, 22, DARKGREEN, LIME)) {
         isTypingCode = false;

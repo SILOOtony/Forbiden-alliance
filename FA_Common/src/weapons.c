@@ -22,13 +22,29 @@ bool SpawnProjectile(PlayerState *state, Projectile projectiles[], int maxProjec
         return false;
     }
 
+    int chosenSlot = -1;
     for (int i = 0; i < maxProjectiles; i++) {
-        if (projectiles[i].active) continue;
-        InitProjectile(&projectiles[i], currentWeapon, state);
-        currentWeapon->ammo--;
-        return true;
+        if (!projectiles[i].active) {
+            chosenSlot = i;
+            break;
+        }
     }
-    return false;
+
+    // Si les 15 emplacements sont déjà en vol (spam-clic rapide), on recycle le plus ancien
+    if (chosenSlot == -1) {
+        chosenSlot = 0;
+        float minLife = projectiles[0].lifetime;
+        for (int i = 1; i < maxProjectiles; i++) {
+            if (projectiles[i].lifetime < minLife) {
+                minLife = projectiles[i].lifetime;
+                chosenSlot = i;
+            }
+        }
+    }
+
+    InitProjectile(&projectiles[chosenSlot], currentWeapon, state);
+    currentWeapon->ammo--;
+    return true;
 }
 
 void UpdateProjectiles(Projectile projectiles[], int maxProjectiles, float dt) {
