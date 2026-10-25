@@ -56,7 +56,7 @@ void ReincarnateAsDrone(PlayerState *state, Vector3 dronePos) {
             .reload_time = 0.25f,
             .reload_timer = 0.0f,
             .projectile_speed = 360.0f,
-            .damage = 15
+            .damage = 50 // 2 tirs (2 x 50 = 100 PV) pour détruire un autre drone
         };
     }
     state->current_slot = 0;
@@ -117,7 +117,7 @@ void UpdatePlayerMovement(PlayerState *plane, KeyBindings *controls, float dt) {
     if (plane->is_drone) {
         baseSpeed = 32.0f; boostSpeed = 55.0f; slowSpeed = 10.0f;
     } else if (plane->plane_class == PLANE_INTERCEPTOR) {
-        baseSpeed = 60.0f; boostSpeed = 95.0f; slowSpeed = 30.0f;
+        baseSpeed = 85.0f; boostSpeed = 135.0f; slowSpeed = 30.0f;
     } else if (plane->plane_class == PLANE_BOMBER) {
         baseSpeed = 35.0f; boostSpeed = 55.0f; slowSpeed = 18.0f;
     }
@@ -173,22 +173,22 @@ void DrawPlanePlayer(const PlayerState *state) {
         } 
         else if (state->plane_class == PLANE_INTERCEPTOR) {
             // Classe 2 : Intercepteur léger (fuselage fin allongé, ailes en flèche, double dérive)
-            DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 0.9f, 0.6f, 6.2f, BLUE);          // Fuselage élancé
-            DrawCube((Vector3){ 0.0f, 0.0f, -3.4f }, 0.4f, 0.3f, 1.2f, SKYBLUE);      // Nez pointu
-            DrawCube((Vector3){ 0.0f, 0.0f, 0.4f }, 5.6f, 0.12f, 2.2f, SKYBLUE);      // Ailes delta rapides
-            DrawCube((Vector3){ -0.6f, 0.7f, 2.3f }, 0.15f, 1.1f, 0.9f, DARKBLUE);    // Dérive gauche
-            DrawCube((Vector3){  0.6f, 0.7f, 2.3f }, 0.15f, 1.1f, 0.9f, DARKBLUE);    // Dérive droite
-            DrawCube((Vector3){ 0.0f, 0.35f, -1.0f }, 0.65f, 0.4f, 1.8f, GOLD);       // Cockpit doré
+            DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 0.9f, 0.6f, 6.2f, BLUE);            // Fuselage élancé
+            DrawCube((Vector3){ 0.0f, 0.0f, -3.4f }, 0.4f, 0.3f, 1.2f, LIGHTGRAY);      // Nez pointu
+            DrawCube((Vector3){ 0.0f, 0.0f, 0.4f }, 5.6f, 0.12f, 2.2f, LIGHTGRAY);      // Ailes delta rapides
+            DrawCube((Vector3){ -0.6f, 0.7f, 2.3f }, 0.15f, 1.1f, 0.9f, DARKBLUE);      // Dérive gauche
+            DrawCube((Vector3){  0.6f, 0.7f, 2.3f }, 0.15f, 1.1f, 0.9f, DARKBLUE);      // Dérive droite
+            DrawCube((Vector3){ 0.0f, 0.35f, -1.0f }, 0.65f, 0.4f, 1.8f, GOLD);         // Cockpit doré
         } 
         else if (state->plane_class == PLANE_BOMBER) {
             // Classe 3 : Bombardier lourd (gros fuselage blindé, grandes ailes + 2 moteurs sous les ailes)
-            DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 2.2f, 1.3f, 6.5f, DARKGREEN);     // Gros fuselage blindé
-            DrawCube((Vector3){ 0.0f, 0.1f, 0.0f }, 10.5f, 0.25f, 2.4f, DARKGRAY);    // Grandes ailes larges
-            DrawCube((Vector3){ -3.0f, -0.35f, 0.2f }, 0.9f, 0.7f, 2.2f, BLACK);      // Réacteur gauche
-            DrawCube((Vector3){  3.0f, -0.35f, 0.2f }, 0.9f, 0.7f, 2.2f, BLACK);      // Réacteur droit
-            DrawCube((Vector3){ -1.0f, 1.1f, 2.6f }, 0.25f, 1.4f, 1.2f, DARKGREEN);   // Double queue lourde G
-            DrawCube((Vector3){  1.0f, 1.1f, 2.6f }, 0.25f, 1.4f, 1.2f, DARKGREEN);   // Double queue lourde D
-            DrawCube((Vector3){ 0.0f, 0.6f, -1.6f }, 1.5f, 0.55f, 1.6f, SKYBLUE);     // Verrière large
+            DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 2.2f, 1.3f, 6.5f, DARKGREEN);       // Gros fuselage blindé
+            DrawCube((Vector3){ 0.0f, 0.1f, 0.0f }, 10.5f, 0.25f, 2.4f, DARKGRAY);      // Grandes ailes larges
+            DrawCube((Vector3){ -3.0f, -0.35f, 0.2f }, 0.9f, 0.7f, 2.2f, BLACK);        // Réacteur gauche
+            DrawCube((Vector3){  3.0f, -0.35f, 0.2f }, 0.9f, 0.7f, 2.2f, BLACK);        // Réacteur droit
+            DrawCube((Vector3){ -1.0f, 1.1f, 2.6f }, 0.25f, 1.4f, 1.2f, DARKGREEN);     // Double queue lourde G
+            DrawCube((Vector3){  1.0f, 1.1f, 2.6f }, 0.25f, 1.4f, 1.2f, DARKGREEN);     // Double queue lourde D
+            DrawCube((Vector3){ 0.0f, 0.6f, -1.6f }, 1.5f, 0.55f, 1.6f, SKYBLUE);       // Verrière large
         } 
         else {
             // Classe 1 : Chasseur Polyvalent (Classique Rouge)

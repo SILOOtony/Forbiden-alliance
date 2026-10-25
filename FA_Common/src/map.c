@@ -56,7 +56,10 @@ void InitMap(GameMap *map, unsigned int seed) {
 
             int tint = FA_GetRandomValue(100, 180);
             b->color = (Color){ tint, tint, tint + 15, 255 };
-            b->hp = (int)(height * 2);
+
+            // Arrondit les PV à un multiple de 15 pour que 15 tirs de drone détruisent le bâtiment
+            int raw_hp = (int)(height * 2);
+            b->hp = ((raw_hp + 14) / 15) * 15;
             b->max_hp = b->hp;
             b->is_destroyed = false;
 

@@ -15,6 +15,9 @@ void CheckProjectileMapCollisions(Projectile projectiles[], int maxProjectiles, 
                 // Seuls les Attaquants peuvent endommager les bâtiments de la ville !
                 if (is_attacker) {
                     int dmg = projectiles[i].damage;
+                    if (projectiles[i].type == WEAPON_DRONE_BLASTER) {
+                        dmg = (map->buildings[j].max_hp + 14) / 15; // 15 tirs de drone pour détruire un bâtiment
+                    }
                     if (dmg > map->buildings[j].hp) dmg = map->buildings[j].hp;
                     map->buildings[j].hp -= dmg;
                     building_damage_dealt[j] += (int16_t)dmg;

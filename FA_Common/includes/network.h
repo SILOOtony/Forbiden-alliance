@@ -1,7 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
-#include "raylib.h"
+#include "fa_types.h"
 #include "map.h"
 #include "drone.h"
 
@@ -27,6 +27,9 @@ typedef enum {
     LOBBY_SET_CLASS = 6  // Sauvegarde la nouvelle classe d'avion dans le JSON sur le VPS
 } LobbyAction;
 
+// Alignement mémoire strict au bit/octet près entre macOS (ARM64) et Linux (x86_64)
+#pragma pack(push, 1)
+
 typedef struct {
     Vector3 position;
     float pitch;
@@ -48,6 +51,8 @@ typedef struct {
 typedef struct {
     Vector3 pos;
     bool is_alive;
+    Vector3 bullet_pos;
+    bool bullet_active;
 } NetDrone;
 
 // --- PAQUETS DE ROOM & COMPTE JSON ---
@@ -98,3 +103,5 @@ typedef struct {
     int16_t building_hp[MAX_BUILDINGS];
     NetDrone drones[MAX_DRONE_COUNT];
 } ServerPacket;
+
+#pragma pack(pop)

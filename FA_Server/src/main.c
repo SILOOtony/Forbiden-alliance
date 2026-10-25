@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <math.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
@@ -13,6 +14,7 @@
 #include "network.h"
 
 #define TICK_RATE 60
+#define TICK_DT (1.0 / (double)TICK_RATE)
 
 typedef struct {
     struct sockaddr_in addr;
@@ -44,6 +46,20 @@ static double GetCurrentTimeSec(void) {
 
 static bool IsSameClient(struct sockaddr_in a, struct sockaddr_in b) {
     return (a.sin_addr.s_addr == b.sin_addr.s_addr) && (a.sin_port == b.sin_port);
+}
+
+// Sécurité réseau : vérifie qu'un client n'envoie pas de flottants NaN/Inf ou hors limites
+static bool IsValidFloat(float v) {
+    return !isnan(v) && !isinf(v) && (v > -20000.0f) && (v < 20000.0f);
+}
+
+static bool IsValidNetPlayer(const NetPlayer *p) {
+    return IsValidFloat(p->position.x) &&
+           IsValidFloat(p->position.y) &&
+           IsValidFloat(p->position.z) &&
+           IsValidFloat(p->pitch) &&
+           IsValidFloat(p->yaw) &&
+           IsValidFloat(p->roll);
 }
 
 // Nettoie l'identifiant pour éviter tout caractère interdit dans le nom du fichier JSON
@@ -94,7 +110,6 @@ static void LoadOrCreateAccountJSON(const char *raw_user, char *clean_out, uint8
 
     FILE *f = fopen(path, "r");
     if (!f) {
-        // Le compte n'existe pas encore : on le crée sur le VPS
         SaveAccountJSON(clean_out, 0, 0, 0);
         printf("[Compte JSON] Nouveau compte cree : %s\n", path);
         return;
@@ -215,16 +230,23 @@ int main(void) {
         ResetRoom(&rooms[r], r);
     }
 
-    printf("=== Serveur Multi-Rooms (%d Rooms 5v5) demarre sur le port UDP %d ===\n", MAX_ROOMS, SERVER_PORT);
-    printf("Tailles -> LobbyClient: %zu o | LobbyServer: %zu o | GameClient: %zu o | GameServer: %zu o\n",
+    printf("=== Serveur Multi-Rooms (%d Rooms 5v5) [100%% Pur C / Sans Raylib] demarre sur UDP %d ===\n", MAX_ROOMS, SERVER_PORT);
+    printf("Tailles (Packed) -> LobbyClient: %zu o | LobbyServer: %zu o | GameClient: %zu o | GameServer: %zu o\n",
            sizeof(LobbyClientPacket), sizeof(LobbyServerPacket), sizeof(ClientPacket), sizeof(ServerPacket));
 
-    const float tick_dt = 1.0f / (float)TICK_RATE;
+    double previousTime = GetCurrentTimeSec();
+    double accumulator = 0.0;
 
     while (1) {
         double now = GetCurrentTimeSec();
+        double frameTime = now - previousTime;
+        previousTime = now;
 
-        // --- 1. RÉCEPTION DES PAQUETS ---
+        // Plafonne le rattrapage en cas de pause système pour éviter une boucle infinie
+        if (frameTime > 0.25) frameTime = 0.25;
+        accumulator += frameTime;
+
+        // --- 1. RÉCEPTION IMMÉDIATE DES PAQUETS UDP ---
         uint8_t recvBuffer[sizeof(ServerPacket)];
         struct sockaddr_in senderAddr;
         socklen_t senderLen = sizeof(senderAddr);
@@ -298,7 +320,6 @@ int main(void) {
                     }
                 }
 
-                // Si le joueur était déjà dans une room lors d'un LOGIN/SET_CLASS, on maintient son compteur à jour
                 if (lobbyOut.room_id >= 0 && lobbyOut.room_id < MAX_ROOMS) {
                     lobbyOut.connected_count = CountRoomPlayers(&rooms[lobbyOut.room_id]);
                 }
@@ -308,6 +329,9 @@ int main(void) {
             else if (packetType == PACKET_GAME && received == sizeof(ClientPacket)) {
                 ClientPacket inPacket;
                 memcpy(&inPacket, recvBuffer, sizeof(ClientPacket));
+
+                // Rejette immédiatement le paquet s'il contient des flottants invalides (NaN / Inf)
+                if (!IsValidNetPlayer(&inPacket.player)) continue;
 
                 int r = inPacket.room_id;
                 if (r < 0 || r >= MAX_ROOMS) {
@@ -337,6 +361,9 @@ int main(void) {
 
                     room->clients[slot].state = inPacket.player;
                     room->clients[slot].state.team = team;
+                    if (room->clients[slot].state.plane_class > 2) {
+                        room->clients[slot].state.plane_class = 0;
+                    }
                     memcpy(room->clients[slot].projectiles, inPacket.projectiles, sizeof(inPacket.projectiles));
 
                     if (room->current_round <= 2) {
@@ -369,6 +396,7 @@ int main(void) {
                         for (int d = 0; d < MAX_DRONE_COUNT; d++) {
                             if (inPacket.drone_destroyed[d]) {
                                 room->drones[d].is_alive = false;
+                                room->drones[d].bullet_active = false;
                             }
                         }
                     }
@@ -376,95 +404,118 @@ int main(void) {
             }
         }
 
-        // --- 2. MISE À JOUR DES MANCHES ET DIFFUSION ---
-        for (int r = 0; r < MAX_ROOMS; r++) {
-            GameRoom *room = &rooms[r];
-            uint8_t activePlayers = 0;
+        // --- 2. BOUCLE DE SIMULATION À PAS DE TEMPS FIXE (60 Hz EXACT) ---
+        while (accumulator >= TICK_DT) {
+            for (int r = 0; r < MAX_ROOMS; r++) {
+                GameRoom *room = &rooms[r];
+                uint8_t activePlayers = 0;
 
-            for (int i = 0; i < MAX_CLIENTS; i++) {
-                if (room->clients[i].connected) {
-                    if ((now - room->clients[i].last_seen) > 10.0) {
-                        printf("[-] Room #%d : Joueur #%d deconnecte (timeout)\n", r + 1, i);
-                        room->clients[i].connected = false;
-                    } else {
-                        activePlayers++;
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    if (room->clients[i].connected) {
+                        if ((now - room->clients[i].last_seen) > 10.0) {
+                            printf("[-] Room #%d : Joueur #%d deconnecte (timeout)\n", r + 1, i);
+                            room->clients[i].connected = false;
+                        } else {
+                            activePlayers++;
+                        }
                     }
                 }
-            }
 
-            if (activePlayers == 0) {
-                if (room->had_players) {
-                    printf("[*] Room #%d vide : reinitialisation.\n", r + 1);
-                    ResetRoom(room, r);
+                if (activePlayers == 0) {
+                    if (room->had_players) {
+                        printf("[*] Room #%d vide : reinitialisation.\n", r + 1);
+                        ResetRoom(room, r);
+                    }
+                    continue;
                 }
-                continue;
-            }
 
-            room->round_timer -= tick_dt;
-            int remainingBuildings = GetCityRemainingBuildings(&room->map);
+                room->round_timer -= (float)TICK_DT;
+                int remainingBuildings = GetCityRemainingBuildings(&room->map);
 
-            if (room->current_round == 1 && (room->round_timer <= 0.0f || remainingBuildings == 0)) {
-                printf("[Room #%d] Fin Manche 1 -> Passage a la Manche 2 !\n", r + 1);
-                StartRoomRound(room, 2);
-            }
-            else if (room->current_round == 2 && (room->round_timer <= 0.0f || remainingBuildings == 0)) {
-                printf("[Room #%d] Fin Manche 2 -> Affichage des resultats !\n", r + 1);
-                StartRoomRound(room, 3);
-            }
-            else if (room->current_round == 3 && room->round_timer <= 0.0f) {
-                printf("[Room #%d] Nouveau match !\n", r + 1);
-                room->team_buildings_destroyed[0] = 0;
-                room->team_buildings_destroyed[1] = 0;
-                room->team_city_damage[0] = 0;
-                room->team_city_damage[1] = 0;
-                StartRoomRound(room, 1);
-            }
+                if (room->current_round == 1 && (room->round_timer <= 0.0f || remainingBuildings == 0)) {
+                    printf("[Room #%d] Fin Manche 1 -> Passage a la Manche 2 !\n", r + 1);
+                    StartRoomRound(room, 2);
+                }
+                else if (room->current_round == 2 && (room->round_timer <= 0.0f || remainingBuildings == 0)) {
+                    printf("[Room #%d] Fin Manche 2 -> Affichage des resultats !\n", r + 1);
+                    StartRoomRound(room, 3);
+                }
+                else if (room->current_round == 3 && room->round_timer <= 0.0f) {
+                    printf("[Room #%d] Nouveau match !\n", r + 1);
+                    room->team_buildings_destroyed[0] = 0;
+                    room->team_buildings_destroyed[1] = 0;
+                    room->team_city_damage[0] = 0;
+                    room->team_city_damage[1] = 0;
+                    StartRoomRound(room, 1);
+                }
 
-            UpdateDrones(room->drones, MAX_DRONE_COUNT, tick_dt);
+                if (room->current_round <= 2) {
+                    uint8_t attackerTeam = (room->current_round == 1) ? 1 : 0;
+                    UpdateDrones(
+                        room->drones,
+                        MAX_DRONE_COUNT,
+                        &room->map,
+                        &room->team_buildings_destroyed[attackerTeam],
+                        &room->team_city_damage[attackerTeam],
+                        (float)TICK_DT
+                    );
+                }
 
-            ServerPacket outPacket = { 0 };
-            outPacket.type = PACKET_GAME;
-            outPacket.room_id = (int8_t)r;
-            outPacket.connected_count = activePlayers;
-            outPacket.map_seed = room->map_seed;
-            outPacket.current_round = room->current_round;
-            outPacket.round_time_left = (room->round_timer > 0.0f) ? (uint16_t)room->round_timer : 0;
-            outPacket.team_buildings_destroyed[0] = room->team_buildings_destroyed[0];
-            outPacket.team_buildings_destroyed[1] = room->team_buildings_destroyed[1];
-            outPacket.team_city_damage[0] = room->team_city_damage[0];
-            outPacket.team_city_damage[1] = room->team_city_damage[1];
+                ServerPacket outPacket = { 0 };
+                outPacket.type = PACKET_GAME;
+                outPacket.room_id = (int8_t)r;
+                outPacket.connected_count = activePlayers;
+                outPacket.map_seed = room->map_seed;
+                outPacket.current_round = room->current_round;
+                outPacket.round_time_left = (room->round_timer > 0.0f) ? (uint16_t)room->round_timer : 0;
+                outPacket.team_buildings_destroyed[0] = room->team_buildings_destroyed[0];
+                outPacket.team_buildings_destroyed[1] = room->team_buildings_destroyed[1];
+                outPacket.team_city_damage[0] = room->team_city_damage[0];
+                outPacket.team_city_damage[1] = room->team_city_damage[1];
 
-            for (int b = 0; b < MAX_BUILDINGS; b++) {
-                outPacket.building_hp[b] = (int16_t)room->map.buildings[b].hp;
-            }
+                for (int b = 0; b < MAX_BUILDINGS; b++) {
+                    outPacket.building_hp[b] = (int16_t)room->map.buildings[b].hp;
+                }
 
-            for (int d = 0; d < MAX_DRONE_COUNT; d++) {
-                outPacket.drones[d].pos = room->drones[d].pos;
-                outPacket.drones[d].is_alive = room->drones[d].is_alive;
-            }
+                for (int d = 0; d < MAX_DRONE_COUNT; d++) {
+                    outPacket.drones[d].pos = room->drones[d].pos;
+                    outPacket.drones[d].is_alive = room->drones[d].is_alive;
+                    outPacket.drones[d].bullet_pos = room->drones[d].bullet_pos;
+                    outPacket.drones[d].bullet_active = room->drones[d].bullet_active;
+                }
 
-            for (int i = 0; i < MAX_CLIENTS; i++) {
-                outPacket.connected[i] = room->clients[i].connected;
-                outPacket.players[i] = room->clients[i].state;
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    outPacket.connected[i] = room->clients[i].connected;
+                    outPacket.players[i] = room->clients[i].state;
 
-                for (int p = 0; p < MAX_PLAYER_PROJECTILE; p++) {
-                    outPacket.projectiles[i * MAX_PLAYER_PROJECTILE + p] = room->clients[i].projectiles[p];
+                    for (int p = 0; p < MAX_PLAYER_PROJECTILE; p++) {
+                        outPacket.projectiles[i * MAX_PLAYER_PROJECTILE + p] = room->clients[i].projectiles[p];
+                    }
+                }
+
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    if (!room->clients[i].connected) continue;
+                    outPacket.your_id = (int8_t)i;
+                    outPacket.damage_received = room->clients[i].pending_damage;
+                    room->clients[i].pending_damage = 0;
+
+                    sendto(sock, &outPacket, sizeof(outPacket), 0, (struct sockaddr *)&room->clients[i].addr, sizeof(room->clients[i].addr));
                 }
             }
 
-            for (int i = 0; i < MAX_CLIENTS; i++) {
-                if (!room->clients[i].connected) continue;
-                outPacket.your_id = (int8_t)i;
-                outPacket.damage_received = room->clients[i].pending_damage;
-                room->clients[i].pending_damage = 0;
-
-                sendto(sock, &outPacket, sizeof(outPacket), 0, (struct sockaddr *)&room->clients[i].addr, sizeof(room->clients[i].addr));
-            }
+            accumulator -= TICK_DT;
         }
 
-        // --- 3. PAUSE DE 1 TICK (16.6 ms = 60 Hz) ---
-        struct timeval sleepTime = { 0, 1000000 / TICK_RATE };
-        select(0, NULL, NULL, NULL, &sleepTime);
+        // --- 3. PAUSE DYNAMIQUE (Ne dort que le temps restant jusqu'au prochain tick) ---
+        double elapsedInLoop = GetCurrentTimeSec() - now;
+        double remainingForTick = (TICK_DT - accumulator) - elapsedInLoop;
+        if (remainingForTick > 0.0005) {
+            struct timeval sleepTime = {
+                .tv_sec = 0,
+                .tv_usec = (suseconds_t)(remainingForTick * 1000000.0)
+            };
+            select(0, NULL, NULL, NULL, &sleepTime);
+        }
     }
 
     close(sock);

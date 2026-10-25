@@ -58,7 +58,7 @@ void DrawProjectiles(const Projectile projectiles[], int maxProjectiles) {
                 DrawSphere(projectiles[i].position, 0.8f, ORANGE);
             } 
             else if (projectiles[i].type == WEAPON_AIR_TO_AIR) {
-                DrawSphere(projectiles[i].position, 0.6f, SKYBLUE);
+                DrawSphere(projectiles[i].position, 0.6f, BLUE);
             } 
             else if (projectiles[i].type == WEAPON_AIR_TO_GROUND) {
                 DrawSphere(projectiles[i].position, 1.4f, DARKGRAY);

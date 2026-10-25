@@ -1,5 +1,5 @@
 #pragma once
-#include "raylib.h"
+#include "fa_types.h"
 #include <stdbool.h>
 
 #define MAX_BUILDINGS 200

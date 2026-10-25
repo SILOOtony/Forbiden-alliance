@@ -39,8 +39,8 @@ void InitWeaponSlotsForClass(Weapon slots[MAX_WEAPON_SLOTS], PlaneClass plane_cl
         slots[0] = (Weapon){
             .type = WEAPON_ROCKET,
             .name = "Heavy Rockets",
-            .ammo = 8,
-            .max_ammo = 8,
+            .ammo = 12,
+            .max_ammo = 12,
             .reload_time = 2.0f,
             .reload_timer = 0.0f,
             .projectile_speed = 260.0f,
@@ -49,9 +49,9 @@ void InitWeaponSlotsForClass(Weapon slots[MAX_WEAPON_SLOTS], PlaneClass plane_cl
         slots[1] = (Weapon){
             .type = WEAPON_AIR_TO_AIR,
             .name = "Defense A2A",
-            .ammo = 4,
-            .max_ammo = 4,
-            .reload_time = 3.0f,
+            .ammo = 8,
+            .max_ammo = 8,
+            .reload_time = 2.5f,
             .reload_timer = 0.0f,
             .projectile_speed = 380.0f,
             .damage = 45

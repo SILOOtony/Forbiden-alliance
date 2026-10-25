@@ -31,7 +31,7 @@ int main(void) {
     struct sockaddr_in serverAddr = { 0 };
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(SERVER_PORT);
-    inet_pton(AF_INET, "157.173.112.67", &serverAddr.sin_addr);
+    inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
 
     ServerPacket latestServerData = { 0 };
     latestServerData.your_id = -1;
@@ -112,7 +112,7 @@ int main(void) {
                     plane.current_slot = (plane.current_slot + 1) % MAX_WEAPON_SLOTS;
                 }
 
-                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsKeyPressed(controls.bindings[ACTION_ATTACK])) {
+                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsKeyPressed(controls.bindings[ACTION_ATTACK]) || IsKeyPressed(KEY_SPACE)) {
                     SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE);
                 }
             } else if (!plane.is_alive && latestServerData.current_round <= 2) {
@@ -174,7 +174,7 @@ int main(void) {
                 }
 
                 if (latestServerData.your_id == -1) {
-                    UpdateDrones(drones, MAX_DRONE_COUNT, TICK_DT);
+                    UpdateDrones(drones, MAX_DRONE_COUNT, &cityMap, NULL, NULL, TICK_DT);
                 }
 
                 UpdateProjectiles(projectile, MAX_PLAYER_PROJECTILE, TICK_DT);
@@ -314,6 +314,8 @@ int main(void) {
                     for (int d = 0; d < MAX_DRONE_COUNT; d++) {
                         drones[d].pos = inPacket.drones[d].pos;
                         drones[d].is_alive = inPacket.drones[d].is_alive;
+                        drones[d].bullet_pos = inPacket.drones[d].bullet_pos;
+                        drones[d].bullet_active = inPacket.drones[d].bullet_active;
                     }
 
                     for (int b = 0; b < cityMap.building_count; b++) {
