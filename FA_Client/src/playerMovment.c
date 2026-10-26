@@ -3,42 +3,84 @@
 #include <math.h>
 #include <stdio.h>
 #include "raymath.h"
+#include "drone.h"
 
 static bool modelsChecked = false;
 static bool hasCustomModel[3] = { false, false, false };
 static Model customModels[3];
+static float customModelScales[3] = { 1.0f, 0.9f, 1.4f };
+static bool hasAttDroneMdl = false;
+static bool hasDefDroneMdl = false;
+static Model attDroneMdl;
+static Model defDroneMdl;
+
+static void EnsureMtlFileForPlanes(void) {
+    if (!FileExists("assets/materials.mtl")) {
+        FILE *f = fopen("assets/materials.mtl", "w");
+        if (f) {
+            fprintf(f,
+                "newmtl mat23\nKd 0.12 0.12 0.15\nd 1.0\n"
+                "newmtl mat17\nKd 0.27 0.35 0.39\nd 1.0\n"
+                "newmtl mat16\nKd 0.47 0.56 0.61\nd 1.0\n"
+                "newmtl mat22\nKd 0.62 0.62 0.62\nd 1.0\n"
+                "newmtl mat25\nKd 0.92 0.95 0.94\nd 1.0\n"
+                "newmtl mat15\nKd 0.81 0.85 0.86\nd 1.0\n"
+                "newmtl mat21\nKd 1.00 1.00 1.00\nd 1.0\n"
+                "newmtl mat3\nKd 0.50 0.87 0.92\nd 1.0\n"
+                "newmtl mat4\nKd 0.00 0.74 0.83\nd 1.0\n"
+                "newmtl mat8\nKd 0.96 0.26 0.21\nd 1.0\n"
+                "newmtl mat14\nKd 1.00 0.34 0.13\nd 1.0\n");
+            fclose(f);
+        }
+    }
+}
 
 static void EnsurePlaneModelsLoaded(void) {
     if (modelsChecked) return;
     modelsChecked = true;
-
-    const char *paths[3] = {
-        "assets/fighter.obj",
-        "assets/interceptor.obj",
-        "assets/bomber.obj"
-    };
+    EnsureMtlFileForPlanes();
 
     for (int i = 0; i < 3; i++) {
         const char *pathToLoad = NULL;
-        if (FileExists(paths[i])) {
-            pathToLoad = paths[i];
-        } else if (FileExists("assets/interceptor.obj")) {
-            // Utilise interceptor.obj par défaut si fighter.obj ou bomber.obj ne sont pas encore dans assets/
+        if (i == PLANE_FIGHTER) {
+            if (FileExists("assets/fighter.obj")) {
+                pathToLoad = "assets/fighter.obj";
+                customModelScales[i] = 1.0f;
+            } else if (FileExists("assets/1397 fighter.obj")) {
+                pathToLoad = "assets/1397 fighter.obj";
+                customModelScales[i] = 0.085f;
+            }
+        } else if (i == PLANE_INTERCEPTOR && FileExists("assets/interceptor.obj")) {
             pathToLoad = "assets/interceptor.obj";
+            customModelScales[i] = 0.9f;
+        } else if (i == PLANE_BOMBER && FileExists("assets/bomber.obj")) {
+            pathToLoad = "assets/bomber.obj";
+            customModelScales[i] = 1.45f;
+        }
+
+        if (pathToLoad == NULL && FileExists("assets/interceptor.obj")) {
+            pathToLoad = "assets/interceptor.obj";
+            customModelScales[i] = (i == PLANE_BOMBER) ? 1.25f : 1.0f;
         }
 
         if (pathToLoad != NULL) {
             customModels[i] = LoadModel(pathToLoad);
             if (customModels[i].meshCount > 0) {
-                // Force l'opacité à 255 sur tous les matériaux (corrige le bug d 0.000000 des fichiers .mtl Blender)
                 for (int m = 0; m < customModels[i].materialCount; m++) {
                     customModels[i].materials[m].maps[MATERIAL_MAP_DIFFUSE].color.a = 255;
                 }
                 hasCustomModel[i] = true;
-                printf("[3D Model] Classe %d chargee depuis : %s (%d meshes, %d materiaux)\n",
-                       i, pathToLoad, customModels[i].meshCount, customModels[i].materialCount);
             }
         }
+    }
+
+    if (FileExists("assets/attacker_drone.obj")) {
+        attDroneMdl = LoadSafeDroneModel("assets/attacker_drone.obj", true);
+        hasAttDroneMdl = (attDroneMdl.meshCount > 0);
+    }
+    if (FileExists("assets/defender_drone.obj")) {
+        defDroneMdl = LoadSafeDroneModel("assets/defender_drone.obj", false);
+        hasDefDroneMdl = (defDroneMdl.meshCount > 0);
     }
 }
 
@@ -84,11 +126,12 @@ static void GetSkinColors(uint8_t skin_id, uint8_t plane_class, Color *primary, 
 }
 
 void InitPlayerState(PlayerState *state) {
+    // Spawns placés à z = +520 et z = -520 (hors de la grille d'immeubles -434..+434) à y = 110
     if (state->is_attacker) {
-        state->position = (Vector3){ 0.0f, 95.0f, 450.0f };
+        state->position = (Vector3){ 0.0f, 110.0f, 520.0f };
         state->yaw = 0.0f;
     } else {
-        state->position = (Vector3){ 0.0f, 80.0f, -250.0f };
+        state->position = (Vector3){ 0.0f, 110.0f, -520.0f };
         state->yaw = PI;
     }
 
@@ -201,6 +244,7 @@ void UpdatePlayerMovement(PlayerState *plane, KeyBindings *controls, float dt) {
     if (IsKeyDown(controls->bindings[ACTION_DOWN])) targetSpeed = slowSpeed;
 
     currentSpeed += (targetSpeed - currentSpeed) * 3.0f * dt;
+    plane->speed = currentSpeed;
 
     Vector3 forward = {
         -cosf(plane->pitch) * sinf(plane->yaw),
@@ -211,6 +255,12 @@ void UpdatePlayerMovement(PlayerState *plane, KeyBindings *controls, float dt) {
     plane->position.x += forward.x * currentSpeed * dt;
     plane->position.y += forward.y * currentSpeed * dt;
     plane->position.z += forward.z * currentSpeed * dt;
+
+    if (plane->position.x >  1000.0f) plane->position.x =  1000.0f;
+    if (plane->position.x < -1000.0f) plane->position.x = -1000.0f;
+    if (plane->position.z >  1000.0f) plane->position.z =  1000.0f;
+    if (plane->position.z < -1000.0f) plane->position.z = -1000.0f;
+    if (plane->position.y >   500.0f) plane->position.y =   500.0f;
 }
 
 void UpdatePlaneCamera(Camera3D *camera, const PlayerState *state) {
@@ -247,53 +297,41 @@ void DrawPlanePlayer(const PlayerState *state) {
         uint8_t cls = (state->plane_class <= 2) ? state->plane_class : 0;
 
         if (state->is_drone) {
-            DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 10.0f, 4.0f, 10.0f, MAROON);
-            DrawCubeWires((Vector3){ 0.0f, 0.0f, 0.0f }, 10.0f, 4.0f, 10.0f, GOLD);
-            DrawCube((Vector3){ 0.0f, 0.0f, -5.2f }, 2.5f, 1.5f, 1.5f, YELLOW);
+            bool useAtt = state->is_attacker;
+            if ((useAtt && hasAttDroneMdl) || (!useAtt && hasDefDroneMdl) || hasAttDroneMdl) {
+                Model *dMdl = (useAtt && hasAttDroneMdl) ? &attDroneMdl : (hasDefDroneMdl ? &defDroneMdl : &attDroneMdl);
+                rlPushMatrix();
+                    rlRotatef(180.0f, 0.0f, 1.0f, 0.0f);
+                    DrawModel(*dMdl, (Vector3){ 0.0f, 0.0f, 0.0f }, 3.8f, WHITE);
+                rlPopMatrix();
+            } else {
+                DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 10.0f, 4.0f, 10.0f, MAROON);
+                DrawCubeWires((Vector3){ 0.0f, 0.0f, 0.0f }, 10.0f, 4.0f, 10.0f, GOLD);
+            }
         }
         else if (hasCustomModel[cls]) {
             Model *mdl = &customModels[cls];
-            // Applique les couleurs du Skin ou de la classe aux différents matériaux du fichier .obj
             if (mdl->materialCount >= 4) {
-                mdl->materials[0].maps[MATERIAL_MAP_DIFFUSE].color = primary;   // Fuselage
-                mdl->materials[1].maps[MATERIAL_MAP_DIFFUSE].color = primary;   // Fuselage principal (455A64)
-                mdl->materials[2].maps[MATERIAL_MAP_DIFFUSE].color = cockpit;   // Verrière du cockpit (80DEEA)
-                mdl->materials[3].maps[MATERIAL_MAP_DIFFUSE].color = (Color){ 30, 30, 35, 255 }; // Tuyères (1A1A1A)
+                mdl->materials[0].maps[MATERIAL_MAP_DIFFUSE].color = primary;
+                mdl->materials[1].maps[MATERIAL_MAP_DIFFUSE].color = primary;
+                mdl->materials[2].maps[MATERIAL_MAP_DIFFUSE].color = cockpit;
+                mdl->materials[3].maps[MATERIAL_MAP_DIFFUSE].color = (Color){ 30, 30, 35, 255 };
                 if (mdl->materialCount >= 5) {
-                    mdl->materials[4].maps[MATERIAL_MAP_DIFFUSE].color = secondary; // Ailes & missiles (78909C)
+                    mdl->materials[4].maps[MATERIAL_MAP_DIFFUSE].color = secondary;
+                }
+            } else {
+                for (int m = 0; m < mdl->materialCount; m++) {
+                    mdl->materials[m].maps[MATERIAL_MAP_DIFFUSE].color = (state->skin_id == 0) ? WHITE : primary;
                 }
             }
 
-            // Rotation de 180° sur Y car le nez de interceptor.obj pointe vers +Z dans Blender
             rlPushMatrix();
                 rlRotatef(180.0f, 0.0f, 1.0f, 0.0f);
-                float scale = (cls == PLANE_BOMBER) ? 1.25f : ((cls == PLANE_INTERCEPTOR) ? 0.9f : 1.0f);
-                DrawModel(*mdl, (Vector3){ 0.0f, 0.0f, 0.0f }, scale, WHITE);
+                DrawModel(*mdl, (Vector3){ 0.0f, 0.0f, 0.0f }, customModelScales[cls], WHITE);
             rlPopMatrix();
 
-            // Flammes des 2 réacteurs à l'arrière du jet
-            DrawSphere((Vector3){ -0.7f * (cls == PLANE_BOMBER ? 1.25f : 1.0f), 0.08f, 4.8f }, 0.32f, ORANGE);
-            DrawSphere((Vector3){  0.7f * (cls == PLANE_BOMBER ? 1.25f : 1.0f), 0.08f, 4.8f }, 0.32f, ORANGE);
-        }
-        else if (cls == PLANE_INTERCEPTOR) {
-            DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 0.9f, 0.6f, 6.2f, primary);
-            DrawCube((Vector3){ 0.0f, 0.0f, -3.4f }, 0.4f, 0.3f, 1.2f, secondary);
-            DrawCube((Vector3){ 0.0f, 0.0f, 0.4f }, 5.6f, 0.12f, 2.2f, secondary);
-            DrawCube((Vector3){ -0.6f, 0.7f, 2.3f }, 0.15f, 1.1f, 0.9f, primary);
-            DrawCube((Vector3){  0.6f, 0.7f, 2.3f }, 0.15f, 1.1f, 0.9f, primary);
-            DrawCube((Vector3){ 0.0f, 0.35f, -1.0f }, 0.65f, 0.4f, 1.8f, cockpit);
-            DrawSphere((Vector3){ 0.0f, 0.0f, 3.4f }, 0.45f, ORANGE);
-        }
-        else if (cls == PLANE_BOMBER) {
-            DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 2.2f, 1.3f, 6.5f, primary);
-            DrawCube((Vector3){ 0.0f, 0.1f, 0.0f }, 10.5f, 0.25f, 2.4f, secondary);
-            DrawCube((Vector3){ -3.0f, -0.35f, 0.2f }, 0.9f, 0.7f, 2.2f, BLACK);
-            DrawCube((Vector3){  3.0f, -0.35f, 0.2f }, 0.9f, 0.7f, 2.2f, BLACK);
-            DrawCube((Vector3){ -1.0f, 1.1f, 2.6f }, 0.25f, 1.4f, 1.2f, primary);
-            DrawCube((Vector3){  1.0f, 1.1f, 2.6f }, 0.25f, 1.4f, 1.2f, primary);
-            DrawCube((Vector3){ 0.0f, 0.6f, -1.6f }, 1.5f, 0.55f, 1.6f, cockpit);
-            DrawSphere((Vector3){ -3.0f, -0.35f, 1.5f }, 0.4f, ORANGE);
-            DrawSphere((Vector3){  3.0f, -0.35f, 1.5f }, 0.4f, ORANGE);
+            DrawSphere((Vector3){ -0.7f, 0.08f, 4.5f }, 0.32f, ORANGE);
+            DrawSphere((Vector3){  0.7f, 0.08f, 4.5f }, 0.32f, ORANGE);
         }
         else {
             DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 1.2f, 0.8f, 5.0f, primary);

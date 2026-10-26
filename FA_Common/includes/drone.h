@@ -38,3 +38,7 @@ void UpdateDrones(
     float dt
 );
 void DrawDrones(const Drone drones[], int max_drone_count);
+
+#ifndef SERVER_BUILD
+Model LoadSafeDroneModel(const char *objPath, bool is_attacker);
+#endif

@@ -93,6 +93,30 @@ void DrawCityTopBar(const GameMap *map, uint8_t currentRound, uint16_t timeLeft,
     DrawText(subTxt, (screenW - subW) / 2, barY + barH + 7, 18, isAttacker ? ORANGE : SKYBLUE);
 }
 
+void DrawLockOnHUD(bool hasTarget, Vector2 targetScreenPos, float lockProgress, bool incomingMissile) {
+    int screenW = GetScreenWidth();
+
+    if (hasTarget) {
+        bool locked = (lockProgress >= 1.0f);
+        float boxSize = 70.0f - lockProgress * 28.0f;
+        Color col = locked ? RED : GOLD;
+        Rectangle r = { targetScreenPos.x - boxSize / 2.0f, targetScreenPos.y - boxSize / 2.0f, boxSize, boxSize };
+        DrawRectangleLinesEx(r, 2.5f, col);
+
+        const char *lbl = locked ? "[ VERROUILLE - TIR AUTOGUIDE ]" : "ACQUISITION...";
+        int tw = MeasureText(lbl, 14);
+        DrawText(lbl, (int)targetScreenPos.x - tw / 2, (int)(r.y + r.height + 5.0f), 14, col);
+    }
+
+    if (incomingMissile) {
+        const char *warn = "!! ALERTE MISSILE AIR-AIR EN APPROCHE !!";
+        int ww = MeasureText(warn, 24);
+        DrawRectangle((screenW - ww) / 2 - 14, 112, ww + 28, 34, Fade(MAROON, 0.85f));
+        DrawRectangleLines((screenW - ww) / 2 - 14, 112, ww + 28, 34, RED);
+        DrawText(warn, (screenW - ww) / 2, 117, 24, YELLOW);
+    }
+}
+
 void DrawDeathScreen(const PlayerState *state) {
     int screenW = GetScreenWidth();
     DrawRectangle(0, 0, screenW, GetScreenHeight(), Fade(BLACK, 0.65f));

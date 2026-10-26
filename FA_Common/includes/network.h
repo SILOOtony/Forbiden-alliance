@@ -7,12 +7,16 @@
 #include "drone.h"
 
 #define SERVER_PORT 8080
-#define MAX_ROOMS 4
+#define MAX_LOBBY_ROOMS 16
+#define MAX_SQUAD_SIZE 5
+#define MAX_GAME_ROOMS 8
+#define MAX_ROOMS MAX_GAME_ROOMS
 #define MAX_CLIENTS 10
 #define MAX_PLAYER_PROJECTILE 15
 #define MAX_PROJECTILES (MAX_CLIENTS * MAX_PLAYER_PROJECTILE)
 #define ROUND_DURATION_SEC 180.0f
 #define MAX_USERNAME_LEN 24
+#define MAX_PASSWORD_LEN 16
 
 typedef enum {
     PACKET_LOBBY = 1,
@@ -20,12 +24,14 @@ typedef enum {
 } PacketType;
 
 typedef enum {
-    LOBBY_CREATE    = 1,
-    LOBBY_JOIN      = 2,
-    LOBBY_HEARTBEAT = 3,
-    LOBBY_LEAVE     = 4,
-    LOBBY_LOGIN     = 5,
-    LOBBY_SET_CLASS = 6
+    LOBBY_CREATE_SQUAD = 1,
+    LOBBY_JOIN_SQUAD   = 2,
+    LOBBY_HEARTBEAT    = 3,
+    LOBBY_LEAVE_SQUAD  = 4,
+    LOBBY_LOGIN        = 5,
+    LOBBY_SET_LOADOUT  = 6,
+    LOBBY_TOGGLE_READY = 7,
+    LOBBY_SET_CITY     = 8  // Nouveau : change immédiatement la ville du salon sur le serveur
 } LobbyAction;
 
 typedef enum {
@@ -44,7 +50,23 @@ static inline float DequantizeCoord(int16_t q) {
     return (float)q / 10.0f;
 }
 
+static inline const char *GetRankName(int elo) {
+    if (elo >= 1500) return "DIAMANT";
+    if (elo >= 1300) return "OR";
+    if (elo >= 1100) return "ARGENT";
+    return "BRONZE";
+}
+
 #pragma pack(push, 1)
+
+typedef struct {
+    char username[16];
+    uint8_t plane_class;
+    uint8_t skin_id;
+    bool is_ready;
+    int16_t elo;
+    uint8_t level;
+} SquadMemberNet;
 
 typedef struct {
     Vector3 position;
@@ -58,6 +80,7 @@ typedef struct {
     uint8_t plane_class;
     uint8_t skin_id;
     uint8_t respawns_left;
+    int16_t elo;
     char username[16];
 } NetPlayer;
 
@@ -81,29 +104,43 @@ typedef struct {
 typedef struct {
     uint8_t type;
     uint8_t action;
-    int8_t room_id;
+    int8_t squad_id;
     uint8_t plane_class;
     uint8_t skin_id;
     uint8_t city_type;
     char username[MAX_USERNAME_LEN];
+    char password[MAX_PASSWORD_LEN];
 } LobbyClientPacket;
 
 typedef struct {
     uint8_t type;
-    int8_t room_id;
-    uint8_t connected_count;
+    int8_t squad_id;
+    uint8_t squad_count;
+    SquadMemberNet squad_members[MAX_SQUAD_SIZE];
+
     uint8_t plane_class;
     uint8_t skin_id;
+    uint8_t unlocked_skins;
     uint8_t city_type;
     bool account_loaded;
+    bool auth_failed;
+    bool is_ready;
+    bool in_matchmaking;
+    uint8_t matchmaking_secs;
+
+    int8_t assigned_game_room;
+    uint32_t session_token;
+
     int32_t xp;
     int32_t gems;
+    int32_t elo;
     char username[MAX_USERNAME_LEN];
 } LobbyServerPacket;
 
 typedef struct {
     uint8_t type;
     int8_t room_id;
+    uint32_t session_token;
     uint32_t seq;
     Vector3 position;
     float pitch;

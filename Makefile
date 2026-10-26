@@ -16,10 +16,9 @@ endif
 
 COMMON_SRC = $(wildcard FA_Common/src/*.c)
 CLIENT_SRC = $(wildcard FA_Client/src/*.c) $(COMMON_SRC)
-SERVER_SRC = FA_Server/src/main.c FA_Common/src/map.c FA_Common/src/drone.c FA_Common/src/weaponSlot.c
+SERVER_SRC = $(wildcard FA_Server/src/*.c) FA_Common/src/map.c FA_Common/src/drone.c FA_Common/src/weaponSlot.c
 
 CLIENT_OBJ = $(CLIENT_SRC:.c=.o)
-
 CLIENT_BIN = client
 SERVER_BIN = server
 

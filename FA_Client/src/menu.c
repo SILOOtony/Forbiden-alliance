@@ -4,18 +4,17 @@
 #include <ctype.h>
 #include "raylib.h"
 #include "weaponSlot.h"
-#include "network.h"
 
 static bool isTypingCode = false;
 static bool isEditingUsername = false;
-static int typedRoomCode = 1;
+static bool isEditingPassword = false;
+static int typedSquadCode = 1;
 
 void UpdateMenuCamera(Camera3D *camera, float angle) {
-    float radius = 320.0f;
-    camera->position.x = cosf(angle) * radius;
-    camera->position.y = 140.0f;
-    camera->position.z = sinf(angle) * radius;
-    camera->target = (Vector3){ 0.0f, 30.0f, 0.0f };
+    camera->position.x = sinf(angle * 0.35f) * 6.0f;
+    camera->position.y = 112.0f;
+    camera->position.z = 128.0f;
+    camera->target = (Vector3){ 0.0f, 104.0f, 95.0f };
 }
 
 static bool DrawButtonRect(const char *text, Rectangle bounds, int fontSize, Color baseColor, Color hoverColor) {
@@ -45,35 +44,30 @@ static bool DrawCenteredButton(const char *text, float yPos, int width, int heig
 
 MenuCommand DrawMenu(
     GameStatus *status,
-    int currentRoom,
-    uint8_t connectedCount,
-    int *outJoinRoomId,
+    const LobbyServerPacket *lobbyState,
+    int *outJoinSquadId,
     char *username,
+    char *password,
     bool accountLoaded,
+    bool authFailed,
     uint8_t *selectedClass,
     uint8_t *selectedSkin,
     uint8_t *selectedCity,
     int accountXp,
-    int accountGems
+    int accountGems,
+    int accountElo,
+    uint8_t unlockedSkins
 ) {
     MenuCommand cmd = MENU_CMD_NONE;
     int screenW = GetScreenWidth();
 
-    DrawRectangle(0, 0, screenW, GetScreenHeight(), Fade(BLACK, 0.6f));
-
-    const char *title = "FORBIDDEN ALLIANCE";
-    int titleSize = 50;
-    int titleWidth = MeasureText(title, titleSize);
-    int titleX = (screenW - titleWidth) / 2;
-    DrawText(title, titleX + 4, 16, titleSize, BLACK);
-    DrawText(title, titleX, 12, titleSize, GOLD);
-
     if (*status == STATUS_PAUSED) {
+        DrawRectangle(0, 0, screenW, GetScreenHeight(), Fade(BLACK, 0.65f));
         if (DrawCenteredButton("REPRENDRE LA PARTIE", 260.0f, 340, 55, 22, DARKBLUE, SKYBLUE)) {
             *status = STATUS_PLAYING;
         }
-        if (DrawCenteredButton("QUITTER LA ROOM", 330.0f, 340, 55, 22, MAROON, RED)) {
-            cmd = MENU_CMD_LEAVE_ROOM;
+        if (DrawCenteredButton("QUITTER LA PARTIE", 330.0f, 340, 55, 22, MAROON, RED)) {
+            cmd = MENU_CMD_LEAVE_SQUAD;
             *status = STATUS_MENU;
         }
         if (DrawCenteredButton("QUITTER LE JEU", 400.0f, 340, 55, 22, DARKGRAY, GRAY)) {
@@ -82,22 +76,49 @@ MenuCommand DrawMenu(
         return cmd;
     }
 
-    // --- 1. COMPTE JOUEUR (JSON VPS + NIVEAU / XP / GEMMES) ---
-    Rectangle accBox = { (float)(screenW - 640) / 2.0f, 68.0f, 640.0f, 68.0f };
-    DrawRectangleRec(accBox, Fade(BLACK, 0.75f));
-    DrawRectangleLinesEx(accBox, 2.0f, accountLoaded ? LIME : GOLD);
+    DrawRectangle(0, 0, screenW, 240, Fade(BLACK, 0.72f));
+    DrawRectangle(0, 485, screenW, GetScreenHeight() - 485, Fade(BLACK, 0.72f));
 
-    DrawText("IDENTIFIANT :", (int)accBox.x + 15, (int)accBox.y + 12, 18, LIGHTGRAY);
+    const char *title = "FORBIDDEN ALLIANCE";
+    int titleSize = 42;
+    int titleWidth = MeasureText(title, titleSize);
+    int titleX = (screenW - titleWidth) / 2;
+    DrawText(title, titleX + 3, 10, titleSize, BLACK);
+    DrawText(title, titleX, 7, titleSize, GOLD);
 
-    Rectangle inputRect = { accBox.x + 155.0f, accBox.y + 6.0f, 230.0f, 32.0f };
+    int level = 1 + (accountXp / 200);
+
+    // --- 1. BARRE DE COMPTE JOUEUR + ELO / RANG ---
+    Rectangle accBox = { (float)(screenW - 720) / 2.0f, 52.0f, 720.0f, 64.0f };
+    DrawRectangleRec(accBox, Fade(BLACK, 0.8f));
+    Color borderCol = authFailed ? RED : (accountLoaded ? LIME : GOLD);
+    DrawRectangleLinesEx(accBox, 2.0f, borderCol);
+
+    DrawText("PSEUDO:", (int)accBox.x + 12, (int)accBox.y + 10, 16, LIGHTGRAY);
+    Rectangle userRect = { accBox.x + 90.0f, accBox.y + 5.0f, 155.0f, 30.0f };
+
+    DrawText("PASS:", (int)accBox.x + 258, (int)accBox.y + 10, 16, LIGHTGRAY);
+    Rectangle passRect = { accBox.x + 312.0f, accBox.y + 5.0f, 130.0f, 30.0f };
+
     Vector2 mousePos = GetMousePosition();
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        isEditingUsername = CheckCollisionPointRec(mousePos, inputRect);
+        isEditingUsername = CheckCollisionPointRec(mousePos, userRect);
+        isEditingPassword = CheckCollisionPointRec(mousePos, passRect);
     }
 
-    DrawRectangleRec(inputRect, isEditingUsername ? DARKBLUE : DARKGRAY);
-    DrawRectangleLinesEx(inputRect, 2.0f, isEditingUsername ? GOLD : GRAY);
-    DrawText(TextFormat("%s%s", username, isEditingUsername ? "_" : ""), (int)inputRect.x + 10, (int)inputRect.y + 6, 20, WHITE);
+    DrawRectangleRec(userRect, isEditingUsername ? DARKBLUE : DARKGRAY);
+    DrawRectangleLinesEx(userRect, 2.0f, isEditingUsername ? GOLD : GRAY);
+    DrawText(TextFormat("%s%s", username, isEditingUsername ? "_" : ""), (int)userRect.x + 8, (int)userRect.y + 6, 18, WHITE);
+
+    char maskedPass[MAX_PASSWORD_LEN];
+    size_t passLen = strlen(password);
+    for (size_t i = 0; i < passLen && i < MAX_PASSWORD_LEN - 1; i++) maskedPass[i] = '*';
+    maskedPass[passLen] = '\0';
+
+    DrawRectangleRec(passRect, isEditingPassword ? DARKBLUE : DARKGRAY);
+    DrawRectangleLinesEx(passRect, 2.0f, isEditingPassword ? GOLD : GRAY);
+    DrawText(TextFormat("%s%s", isEditingPassword ? password : maskedPass, isEditingPassword ? "_" : ""),
+             (int)passRect.x + 8, (int)passRect.y + 6, 18, WHITE);
 
     if (isEditingUsername) {
         int key = GetCharPressed();
@@ -106,140 +127,192 @@ MenuCommand DrawMenu(
             if ((isalnum(key) || key == '_' || key == '-') && len < MAX_USERNAME_LEN - 2) {
                 username[len] = (char)key;
                 username[len + 1] = '\0';
+                accountLoaded = false;
             }
             key = GetCharPressed();
         }
         if (IsKeyPressed(KEY_BACKSPACE)) {
             size_t len = strlen(username);
-            if (len > 0) username[len - 1] = '\0';
+            if (len > 0) {
+                username[len - 1] = '\0';
+                accountLoaded = false;
+            }
         }
-        if (IsKeyPressed(KEY_ENTER)) {
+        if (IsKeyPressed(KEY_ENTER) && strlen(username) > 0) {
             isEditingUsername = false;
+            cmd = MENU_CMD_LOGIN;
+        }
+    } else if (isEditingPassword) {
+        int key = GetCharPressed();
+        while (key > 0) {
+            size_t len = strlen(password);
+            if ((isalnum(key) || key == '_' || key == '-') && len < MAX_PASSWORD_LEN - 2) {
+                password[len] = (char)key;
+                password[len + 1] = '\0';
+            }
+            key = GetCharPressed();
+        }
+        if (IsKeyPressed(KEY_BACKSPACE)) {
+            size_t len = strlen(password);
+            if (len > 0) password[len - 1] = '\0';
+        }
+        if (IsKeyPressed(KEY_ENTER) && strlen(username) > 0) {
+            isEditingPassword = false;
             cmd = MENU_CMD_LOGIN;
         }
     }
 
-    Rectangle loginBtn = { accBox.x + 400.0f, accBox.y + 6.0f, 225.0f, 32.0f };
-    const char *loginLabel = accountLoaded ? "COMPTE SYNCHRONISE" : "CHARGER / CREER JSON";
-    if (DrawButtonRect(loginLabel, loginBtn, 15, accountLoaded ? DARKGREEN : DARKBLUE, SKYBLUE)) {
+    Rectangle loginBtn = { accBox.x + 455.0f, accBox.y + 5.0f, 252.0f, 30.0f };
+    const char *loginLabel = authFailed ? "ERREUR MOT DE PASSE" : (accountLoaded ? "PROFIL SYNCHRONISE" : "CONNECTER / CREER");
+    Color loginCol = authFailed ? MAROON : (accountLoaded ? DARKGREEN : DARKBLUE);
+    if (DrawButtonRect(loginLabel, loginBtn, 14, loginCol, SKYBLUE) && strlen(username) > 0) {
         isEditingUsername = false;
+        isEditingPassword = false;
         cmd = MENU_CMD_LOGIN;
     }
 
-    int level = 1 + (accountXp / 200);
-    const char *progTxt = TextFormat("NIVEAU %d   |   XP : %d   |   GEMMES : %d", level, accountXp, accountGems);
-    DrawText(progTxt, (screenW - MeasureText(progTxt, 17)) / 2, (int)accBox.y + 44, 17, GOLD);
+    if (authFailed) {
+        const char *errTxt = "MOT DE PASSE INCORRECT POUR CE PSEUDO !";
+        DrawText(errTxt, (screenW - MeasureText(errTxt, 16)) / 2, (int)accBox.y + 41, 16, RED);
+    } else {
+        const char *progTxt = TextFormat("RANG : %s (%d ELO)   |   NIVEAU %d   |   XP : %d   |   GEMMES : %d",
+                                         GetRankName(accountElo), accountElo, level, accountXp, accountGems);
+        DrawText(progTxt, (screenW - MeasureText(progTxt, 16)) / 2, (int)accBox.y + 41, 16, GOLD);
+    }
 
-    // --- 2. SÉLECTION DES 3 CLASSES D'AVIONS ---
-    const char *classNames[3] = { "1. CHASSEUR (100 PV)", "2. INTERCEPTEUR (75 PV)", "3. BOMBARDIER (150 PV)" };
-    float classStartX = (float)(screenW - 640) / 2.0f;
+    // --- 2. CLASSES D'AVIONS (DÉBLOCAGE PAR NIVEAU) ---
+    float startX = (float)(screenW - 720) / 2.0f;
+    const int reqLevels[3] = { 1, 2, 4 };
+    const char *cLabels[3] = {
+        "1. CHASSEUR (Niv.1)",
+        (level >= 2) ? "2. INTERCEPTEUR (Niv.2)" : "2. INTERCEPTEUR [BLOQUE Niv.2]",
+        (level >= 4) ? "3. BOMBARDIER (Niv.4)"   : "3. BOMBARDIER [BLOQUE Niv.4]"
+    };
+
     for (int c = 0; c < 3; c++) {
-        Rectangle cBtn = { classStartX + c * 218.0f, 146.0f, 204.0f, 40.0f };
+        Rectangle cBtn = { startX + c * 244.0f, 122.0f, 232.0f, 34.0f };
+        bool unlocked = (level >= reqLevels[c]);
         bool isSel = (*selectedClass == (uint8_t)c);
-        if (DrawButtonRect(classNames[c], cBtn, 15, isSel ? DARKGREEN : DARKGRAY, LIME)) {
+        Color bg = !unlocked ? (Color){ 60, 25, 25, 255 } : (isSel ? DARKGREEN : DARKGRAY);
+        if (DrawButtonRect(cLabels[c], cBtn, 13, bg, unlocked ? LIME : RED) && unlocked) {
             *selectedClass = (uint8_t)c;
-            cmd = MENU_CMD_SELECT_CLASS;
+            cmd = MENU_CMD_SET_LOADOUT;
         }
         if (isSel) DrawRectangleLinesEx(cBtn, 2.5f, GOLD);
     }
 
-    // --- 3. SÉLECTION DES 5 SKINS D'AVIONS ---
-    const char *skinNames[5] = { "SKIN: CLASSIQUE", "SKIN: FURTIF", "SKIN: OR", "SKIN: CYBER", "SKIN: ARCTIQUE" };
+    // --- 3. BOUTIQUE DE SKINS (ACHAT EN GEMMES & ÉQUIPEMENT) ---
+    const char *sBaseNames[5] = { "CLASSIQUE", "FURTIF", "OR", "CYBER", "ARCTIQUE" };
+    const int skinCosts[5] = { 0, 50, 100, 150, 200 };
+
     for (int s = 0; s < 5; s++) {
-        Rectangle sBtn = { classStartX + s * 130.0f, 194.0f, 120.0f, 34.0f };
-        bool isSel = (*selectedSkin == (uint8_t)s);
-        if (DrawButtonRect(skinNames[s], sBtn, 12, isSel ? DARKPURPLE : DARKGRAY, PURPLE)) {
-            *selectedSkin = (uint8_t)s;
-            cmd = MENU_CMD_SELECT_CLASS;
+        Rectangle sBtn = { startX + s * 146.0f, 162.0f, 136.0f, 32.0f };
+        bool isOwned = ((unlockedSkins & (1 << s)) != 0);
+        bool isSel   = (*selectedSkin == (uint8_t)s);
+
+        const char *label = isSel ? TextFormat("%s [EQUIPE]", sBaseNames[s]) :
+                            (isOwned ? TextFormat("%s [POSSEDE]", sBaseNames[s]) :
+                             TextFormat("%s (%dG)", sBaseNames[s], skinCosts[s]));
+
+        Color bg = isSel ? DARKPURPLE : (isOwned ? (Color){ 45, 55, 75, 255 } : (Color){ 75, 55, 20, 255 });
+        if (DrawButtonRect(label, sBtn, 11, bg, PURPLE)) {
+            if (isOwned || accountGems >= skinCosts[s]) {
+                *selectedSkin = (uint8_t)s;
+                cmd = MENU_CMD_SET_LOADOUT;
+            }
         }
         if (isSel) DrawRectangleLinesEx(sBtn, 2.0f, GOLD);
     }
 
-    // --- 4. SÉLECTION DE LA VILLE RÉELLE (PARIS / NEW YORK / TOKYO / DUBAÏ) ---
+    // --- 4. CHOIX DE LA VILLE ---
     const char *cityNames[4] = { "VILLE : PARIS", "VILLE : NEW YORK", "VILLE : TOKYO", "VILLE : DUBAI" };
     for (int m = 0; m < 4; m++) {
-        Rectangle mBtn = { classStartX + m * 163.0f, 236.0f, 151.0f, 36.0f };
+        Rectangle mBtn = { startX + m * 183.0f, 200.0f, 171.0f, 32.0f };
         bool isSel = (*selectedCity == (uint8_t)m);
-        if (DrawButtonRect(cityNames[m], mBtn, 14, isSel ? DARKBLUE : DARKGRAY, SKYBLUE)) {
+        if (DrawButtonRect(cityNames[m], mBtn, 13, isSel ? DARKBLUE : DARKGRAY, SKYBLUE)) {
             *selectedCity = (uint8_t)m;
             cmd = MENU_CMD_SELECT_CITY;
         }
         if (isSel) DrawRectangleLinesEx(mBtn, 2.0f, GOLD);
     }
 
-    // --- 5. ENCADRÉ DE ROOM ---
-    Rectangle roomBox = { (float)(screenW - 500) / 2.0f, 282.0f, 500.0f, 74.0f };
-    DrawRectangleRec(roomBox, Fade(BLACK, 0.7f));
-    DrawRectangleLinesEx(roomBox, 2.0f, (currentRoom != -1) ? LIME : GRAY);
+    // --- 5. ZONE INFÉRIEURE : CADRE ÉLARGI (720px) + NUMÉRO DE ROOM BIEN VISIBLE ---
+    int squadId = lobbyState->squad_id;
+    Rectangle squadBox = { (float)(screenW - 720) / 2.0f, 492.0f, 720.0f, 54.0f };
+    DrawRectangleRec(squadBox, Fade(BLACK, 0.85f));
+    DrawRectangleLinesEx(squadBox, 2.0f, (squadId != -1) ? LIME : GRAY);
 
-    if (currentRoom != -1) {
-        const char *codeTxt = TextFormat("CODE DE LA ROOM : %d (%s)", currentRoom + 1, GetCityName(*selectedCity));
-        DrawText(codeTxt, (screenW - MeasureText(codeTxt, 22)) / 2, 290, 22, GOLD);
+    if (squadId != -1) {
+        const char *sqTitle = TextFormat("CODE ROOM / ESCOUADE : #%d   |   JOUEURS : %d / 5   |   VILLE : %s",
+                                         squadId + 1, lobbyState->squad_count, GetCityName(*selectedCity));
+        DrawText(sqTitle, (screenW - MeasureText(sqTitle, 17)) / 2, 498, 17, GOLD);
 
-        const char *countTxt = TextFormat("%d / 10 connectes sur cette room", connectedCount);
-        DrawText(countTxt, (screenW - MeasureText(countTxt, 19)) / 2, 322, 19, LIME);
+        const char *statusLine = lobbyState->in_matchmaking
+            ? TextFormat("MATCHMAKING EN COURS... Recherche de partie (%us)", lobbyState->matchmaking_secs)
+            : "Donnez le CODE ci-dessus a vos amis, puis cliquez tous sur PRET !";
+        DrawText(statusLine, (screenW - MeasureText(statusLine, 14)) / 2, 523, 14,
+                 lobbyState->in_matchmaking ? SKYBLUE : LIME);
     } else {
-        const char *noRoomTxt = TextFormat("CARTE SELECTIONNEE : %s", GetCityName(*selectedCity));
-        DrawText(noRoomTxt, (screenW - MeasureText(noRoomTxt, 20)) / 2, 294, 20, LIGHTGRAY);
-
-        const char *subTxt = "Creez/rejoignez un code, ou cliquez sur PRET pour lancer";
-        DrawText(subTxt, (screenW - MeasureText(subTxt, 14)) / 2, 325, 14, GRAY);
+        const char *noSq = "MODE SOLO / AUCUNE ROOM (Creez une Room 1-16 ou cliquez sur PRET)";
+        DrawText(noSq, (screenW - MeasureText(noSq, 15)) / 2, 500, 15, LIGHTGRAY);
+        const char *subSq = "Les avions de votre escouade s'affichent en 3D au centre de l'ecran !";
+        DrawText(subSq, (screenW - MeasureText(subSq, 14)) / 2, 523, 14, GRAY);
     }
 
-    // --- 6. BOUTON PRINCIPAL : PRÊT ---
-    const char *readyLabel = (currentRoom != -1) ? "PRET (LANCER LA ROOM)" : "PRET (REJOINDRE UNE PARTIE)";
-    if (DrawCenteredButton(readyLabel, 368.0f, 380, 52, 22, DARKGREEN, LIME)) {
+    const char *readyTxt = lobbyState->is_ready
+        ? (lobbyState->in_matchmaking ? "ANNULER (MATCHMAKING EN COURS...)" : "PRET ! (EN ATTENTE DE LA ROOM)")
+        : "PRET (LANCER LE MATCHMAKING)";
+    Color readyBg = lobbyState->is_ready ? ORANGE : DARKGREEN;
+    Color readyHover = lobbyState->is_ready ? RED : LIME;
+
+    if (DrawCenteredButton(readyTxt, 554.0f, 440, 48, 20, readyBg, readyHover)) {
         isTypingCode = false;
         isEditingUsername = false;
-        *status = STATUS_PLAYING;
-        return MENU_CMD_START_GAME;
+        isEditingPassword = false;
+        cmd = MENU_CMD_TOGGLE_READY;
     }
 
-    // --- 7. BOUTONS DE ROOM ---
-    if (currentRoom == -1) {
+    if (squadId == -1) {
         if (!isTypingCode) {
-            if (DrawCenteredButton("CREER UNE ROOM", 432.0f, 380, 46, 20, DARKBLUE, SKYBLUE)) {
-                cmd = MENU_CMD_CREATE_ROOM;
+            Rectangle createBtn = { (float)(screenW / 2 - 310), 610.0f, 300.0f, 42.0f };
+            Rectangle joinBtn   = { (float)(screenW / 2 + 10),  610.0f, 300.0f, 42.0f };
+            if (DrawButtonRect("CREER UNE ROOM ESCOUADE", createBtn, 16, DARKBLUE, SKYBLUE)) {
+                cmd = MENU_CMD_CREATE_SQUAD;
             }
-            if (DrawCenteredButton("REJOINDRE AVEC UN CODE", 488.0f, 380, 46, 20, DARKPURPLE, PURPLE)) {
+            if (DrawButtonRect("REJOINDRE AVEC UN CODE", joinBtn, 16, DARKPURPLE, PURPLE)) {
                 isTypingCode = true;
             }
         } else {
-            if (!isEditingUsername) {
-                if (IsKeyPressed(KEY_ONE)   || IsKeyPressed(KEY_KP_1)) typedRoomCode = 1;
-                if (IsKeyPressed(KEY_TWO)   || IsKeyPressed(KEY_KP_2)) typedRoomCode = 2;
-                if (IsKeyPressed(KEY_THREE) || IsKeyPressed(KEY_KP_3)) typedRoomCode = 3;
-                if (IsKeyPressed(KEY_FOUR)  || IsKeyPressed(KEY_KP_4)) typedRoomCode = 4;
+            const char *prompt = TextFormat("Code de Room Escouade (1 a %d) : [ %d ]", MAX_LOBBY_ROOMS, typedSquadCode);
+            DrawText(prompt, (screenW - MeasureText(prompt, 18)) / 2, 608, 18, GOLD);
+
+            Rectangle minusBtn = { (float)(screenW / 2 - 190), 632.0f, 45.0f, 34.0f };
+            Rectangle plusBtn  = { (float)(screenW / 2 - 135), 632.0f, 45.0f, 34.0f };
+            Rectangle okBtn    = { (float)(screenW / 2 - 75),  632.0f, 150.0f, 34.0f };
+            Rectangle cancelB  = { (float)(screenW / 2 + 85),  632.0f, 110.0f, 34.0f };
+
+            if (DrawButtonRect("-", minusBtn, 22, DARKGRAY, SKYBLUE)) {
+                typedSquadCode = (typedSquadCode > 1) ? typedSquadCode - 1 : MAX_LOBBY_ROOMS;
             }
-
-            const char *prompt = TextFormat("Choisissez le code de Room (1 a 4) : [ %d ]", typedRoomCode);
-            DrawText(prompt, (screenW - MeasureText(prompt, 20)) / 2, 435, 20, GOLD);
-
-            float startX = (float)(screenW - 230) / 2.0f;
-            for (int c = 1; c <= 4; c++) {
-                Rectangle numBtn = { startX + (c - 1) * 60.0f, 465.0f, 50.0f, 38.0f };
-                Color bg = (typedRoomCode == c) ? GOLD : DARKGRAY;
-                if (DrawButtonRect(TextFormat("%d", c), numBtn, 20, bg, SKYBLUE)) {
-                    typedRoomCode = c;
-                }
+            if (DrawButtonRect("+", plusBtn, 22, DARKGRAY, SKYBLUE)) {
+                typedSquadCode = (typedSquadCode < MAX_LOBBY_ROOMS) ? typedSquadCode + 1 : 1;
             }
-
-            if (DrawCenteredButton("VALIDER LE CODE", 512.0f, 220, 42, 18, DARKGREEN, LIME)) {
-                *outJoinRoomId = typedRoomCode - 1;
+            if (DrawButtonRect("REJOINDRE", okBtn, 16, DARKGREEN, LIME)) {
+                *outJoinSquadId = typedSquadCode - 1;
                 isTypingCode = false;
-                cmd = MENU_CMD_JOIN_ROOM;
+                cmd = MENU_CMD_JOIN_SQUAD;
             }
-            if (DrawCenteredButton("ANNULER", 560.0f, 180, 36, 16, MAROON, RED)) {
+            if (DrawButtonRect("ANNULER", cancelB, 15, MAROON, RED)) {
                 isTypingCode = false;
             }
         }
     } else {
-        if (DrawCenteredButton("QUITTER LA ROOM", 432.0f, 380, 46, 20, MAROON, RED)) {
-            cmd = MENU_CMD_LEAVE_ROOM;
+        if (DrawCenteredButton(TextFormat("QUITTER LA ROOM #%d", squadId + 1), 610.0f, 280, 40, 17, MAROON, RED)) {
+            cmd = MENU_CMD_LEAVE_SQUAD;
         }
     }
 
-    if (!isTypingCode && DrawCenteredButton("QUITTER LE JEU", 615.0f, 260, 44, 18, DARKGRAY, GRAY)) {
+    if (!isTypingCode && DrawCenteredButton("QUITTER LE JEU", 662.0f, 220, 36, 16, DARKGRAY, GRAY)) {
         *status = STATUS_QUIT;
     }
 

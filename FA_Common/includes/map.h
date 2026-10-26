@@ -29,6 +29,7 @@ typedef struct {
     int total_max_hp;
     Vector2 ground_size;
     unsigned int seed;
+    unsigned int drone_rng; // RNG isolé par salon de jeu (Étape 10)
     uint8_t city_type;
 } GameMap;
 
