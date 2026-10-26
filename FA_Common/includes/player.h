@@ -23,7 +23,8 @@ typedef struct {
     bool is_alive;
     bool is_drone;
     uint8_t team;
-    uint8_t plane_class;      // 0 = Chasseur, 1 = Intercepteur, 2 = Bombardier
+    uint8_t plane_class; // 0 = Chasseur, 1 = Intercepteur, 2 = Bombardier
+    uint8_t skin_id;     // 0 = Classique, 1 = Furtif, 2 = Or, 3 = Cyber, 4 = Arctique
     bool is_attacker;
     int plane_respawns_left;
     Weapon weapons[MAX_WEAPON_SLOTS];

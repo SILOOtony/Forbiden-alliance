@@ -17,7 +17,8 @@ typedef enum {
     MENU_CMD_LEAVE_ROOM,
     MENU_CMD_START_GAME,
     MENU_CMD_LOGIN,
-    MENU_CMD_SELECT_CLASS
+    MENU_CMD_SELECT_CLASS,
+    MENU_CMD_SELECT_CITY
 } MenuCommand;
 
 MenuCommand DrawMenu(
@@ -28,6 +29,8 @@ MenuCommand DrawMenu(
     char *username,
     bool accountLoaded,
     uint8_t *selectedClass,
+    uint8_t *selectedSkin,
+    uint8_t *selectedCity,
     int accountXp,
     int accountGems
 );

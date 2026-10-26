@@ -3,6 +3,8 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <string.h>
+#include <stdlib.h>
+#include <math.h>
 
 #include "raylib.h"
 #include "raymath.h"
@@ -18,11 +20,63 @@
 
 #define TICK_RATE 60.0f
 #define TICK_DT (1.0f / TICK_RATE)
+#define MAX_EXPLOSIONS 24
+
+typedef struct {
+    Vector3 pos;
+    float timer;
+    float max_time;
+    bool active;
+} ExplosionFX;
+
+static Sound CreateSynthSound(int type) {
+    int sampleRate = 22050;
+    int sampleCount = (type == 0) ? (sampleRate / 6) : (sampleRate / 2);
+    short *samples = (short *)malloc((size_t)sampleCount * sizeof(short));
+
+    for (int i = 0; i < sampleCount; i++) {
+        float t = (float)i / (float)sampleRate;
+        float env = 1.0f - ((float)i / (float)sampleCount);
+        if (type == 0) {
+            float freq = 580.0f - 420.0f * ((float)i / (float)sampleCount);
+            samples[i] = (short)(sinf(2.0f * PI * freq * t) * 14000.0f * env);
+        } else {
+            float noise = ((float)(rand() % 2000) / 1000.0f) - 1.0f;
+            float boom  = sinf(2.0f * PI * 65.0f * t);
+            samples[i] = (short)((noise * 0.65f + boom * 0.35f) * 20000.0f * env * env);
+        }
+    }
+
+    Wave wave = {
+        .frameCount = (unsigned int)sampleCount,
+        .sampleRate = (unsigned int)sampleRate,
+        .sampleSize = 16,
+        .channels = 1,
+        .data = samples
+    };
+    Sound s = LoadSoundFromWave(wave);
+    free(samples);
+    return s;
+}
+
+static void SpawnExplosion(ExplosionFX fx[], Vector3 pos) {
+    for (int i = 0; i < MAX_EXPLOSIONS; i++) {
+        if (!fx[i].active) {
+            fx[i] = (ExplosionFX){ .pos = pos, .timer = 0.0f, .max_time = 0.65f, .active = true };
+            return;
+        }
+    }
+}
 
 int main(void) {
     InitWindow(1280, 720, "Forbidden Alliance - Vol 3D (5v5)");
+    InitAudioDevice();
     SetTargetFPS(60);
-   
+    ToggleFullscreen();
+
+    Sound sfxShoot = CreateSynthSound(0);
+    Sound sfxBoom  = CreateSynthSound(1);
+    ExplosionFX explosions[MAX_EXPLOSIONS] = { 0 };
 
     int netSocket = socket(AF_INET, SOCK_DGRAM, 0);
     int flags = fcntl(netSocket, F_GETFL, 0);
@@ -49,6 +103,8 @@ int main(void) {
     char username[MAX_USERNAME_LEN] = "tony";
     bool accountLoaded = false;
     uint8_t selectedClass = PLANE_FIGHTER;
+    uint8_t selectedSkin  = 0;
+    uint8_t selectedCity  = CITY_PARIS;
     int accountXp = 0;
     int accountGems = 0;
 
@@ -63,12 +119,13 @@ int main(void) {
 
     KeyBindings controls = InitKeyBinds();
     GameMap cityMap = { 0 };
-    InitMap(&cityMap, 133742);
+    InitMap(&cityMap, 133740u + selectedCity);
 
     PlayerState plane = { 0 };
     plane.team = 1;
     plane.is_attacker = true;
     plane.plane_class = selectedClass;
+    plane.skin_id = selectedSkin;
     plane.plane_respawns_left = 3;
     InitPlayerState(&plane);
 
@@ -76,7 +133,9 @@ int main(void) {
         .type = PACKET_LOBBY,
         .action = LOBBY_LOGIN,
         .room_id = -1,
-        .plane_class = selectedClass
+        .plane_class = selectedClass,
+        .skin_id = selectedSkin,
+        .city_type = selectedCity
     };
     strncpy(initLogin.username, username, MAX_USERNAME_LEN - 1);
     sendto(netSocket, &initLogin, sizeof(initLogin), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
@@ -123,6 +182,7 @@ int main(void) {
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsKeyPressed(controls.bindings[ACTION_ATTACK]) || IsKeyPressed(KEY_SPACE)) {
                     if (SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE)) {
                         pendingFireSlot = (uint8_t)(plane.current_slot + 1);
+                        PlaySound(sfxShoot);
                     }
                 }
             } else if (!plane.is_alive && latestServerData.current_round <= 2) {
@@ -131,6 +191,7 @@ int main(void) {
                         pendingRespawnCmd = RESPAWN_PLANE;
                         plane.plane_respawns_left--;
                         plane.plane_class = selectedClass;
+                        plane.skin_id = selectedSkin;
                         memset(projectile, 0, sizeof(projectile));
                         InitPlayerState(&plane);
                     }
@@ -157,6 +218,13 @@ int main(void) {
         // --- 2. BOUCLE DE SIMULATION PAR TICKS (60 Hz) ---
         accumulator += frameTime;
         while (accumulator >= TICK_DT) {
+            for (int e = 0; e < MAX_EXPLOSIONS; e++) {
+                if (explosions[e].active) {
+                    explosions[e].timer += TICK_DT;
+                    if (explosions[e].timer >= explosions[e].max_time) explosions[e].active = false;
+                }
+            }
+
             if (status == STATUS_MENU) {
                 menuCameraAngle += 0.15f * TICK_DT;
                 UpdateMenuCamera(&camera, menuCameraAngle);
@@ -168,7 +236,9 @@ int main(void) {
                             .type = PACKET_LOBBY,
                             .action = LOBBY_HEARTBEAT,
                             .room_id = (int8_t)currentRoom,
-                            .plane_class = selectedClass
+                            .plane_class = selectedClass,
+                            .skin_id = selectedSkin,
+                            .city_type = selectedCity
                         };
                         strncpy(hb.username, username, MAX_USERNAME_LEN - 1);
                         sendto(netSocket, &hb, sizeof(hb), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
@@ -178,12 +248,16 @@ int main(void) {
             } 
             else if (status == STATUS_PLAYING || status == STATUS_PAUSED) {
                 int16_t dummy_bldg_dmg[MAX_BUILDINGS] = { 0 };
+                bool wasAlive = plane.is_alive;
 
                 if (status == STATUS_PLAYING && plane.is_alive && latestServerData.current_round <= 2) {
                     UpdatePlayerMovement(&plane, &controls, TICK_DT);
                     UpdatePlaneCamera(&camera, &plane);
                     UpdateWeaponsReload(plane.weapons, TICK_DT);
-                    CheckPlaneMapCollision(&plane, &cityMap, dummy_bldg_dmg);
+                    if (CheckPlaneMapCollision(&plane, &cityMap, dummy_bldg_dmg) && wasAlive) {
+                        SpawnExplosion(explosions, plane.position);
+                        PlaySound(sfxBoom);
+                    }
                 }
 
                 for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -192,7 +266,6 @@ int main(void) {
                     }
                 }
 
-                // Toujours mettre à jour les projectiles locaux pour libérer les 15 slots !
                 UpdateProjectiles(projectile, MAX_PLAYER_PROJECTILE, TICK_DT);
                 CheckProjectileMapCollisions(projectile, MAX_PLAYER_PROJECTILE, &cityMap, plane.is_attacker, dummy_bldg_dmg);
                 CheckProjectileDroneCollisions(projectile, MAX_PLAYER_PROJECTILE, drones, MAX_DRONE_COUNT, plane.is_attacker);
@@ -201,7 +274,6 @@ int main(void) {
                     UpdateDrones(drones, MAX_DRONE_COUNT, &cityMap, NULL, NULL, TICK_DT);
                 }
 
-                // --- ENVOI DU PAQUET CLIENT AUTORITAIRE (61 octets) ---
                 clientSeq++;
                 ClientPacket outPacket = {
                     .type = PACKET_GAME,
@@ -212,6 +284,8 @@ int main(void) {
                     .yaw = plane.yaw,
                     .roll = plane.roll,
                     .plane_class = selectedClass,
+                    .skin_id = selectedSkin,
+                    .city_type = selectedCity,
                     .fire_slot = pendingFireSlot,
                     .respawn_cmd = pendingRespawnCmd
                 };
@@ -237,10 +311,18 @@ int main(void) {
                     if (lobbyIn.account_loaded) {
                         accountLoaded = true;
                         selectedClass = lobbyIn.plane_class;
+                        selectedSkin  = lobbyIn.skin_id;
                         plane.plane_class = selectedClass;
+                        plane.skin_id     = selectedSkin;
                         accountXp = lobbyIn.xp;
                         accountGems = lobbyIn.gems;
                         strncpy(username, lobbyIn.username, MAX_USERNAME_LEN - 1);
+                    }
+                    if (currentRoom != -1) {
+                        selectedCity = lobbyIn.city_type % 4;
+                        if (cityMap.city_type != selectedCity) {
+                            InitMap(&cityMap, 133740u + selectedCity);
+                        }
                     }
                 }
                 else if (packetType == PACKET_GAME && received >= (ssize_t)SERVER_PACKET_BASE_SIZE) {
@@ -270,11 +352,16 @@ int main(void) {
 
                     if (firstConnect && (plane.team != prevTeam || plane.is_attacker != prevAttacker)) {
                         plane.plane_class = selectedClass;
+                        plane.skin_id = selectedSkin;
                         InitPlayerState(&plane);
                     }
 
                     if (inPacket.your_id >= 0 && inPacket.your_id < MAX_CLIENTS && inPacket.current_round <= 2) {
                         NetPlayer me = inPacket.players[inPacket.your_id];
+                        if (plane.is_alive && !me.is_alive) {
+                            SpawnExplosion(explosions, plane.position);
+                            PlaySound(sfxBoom);
+                        }
                         plane.hp = me.hp;
                         plane.is_alive = me.is_alive;
                         plane.plane_respawns_left = me.respawns_left;
@@ -285,6 +372,7 @@ int main(void) {
 
                     if (cityMap.seed != inPacket.map_seed && inPacket.map_seed != 0) {
                         InitMap(&cityMap, inPacket.map_seed);
+                        selectedCity = cityMap.city_type;
                     }
 
                     if (inPacket.current_round != localRound) {
@@ -295,10 +383,15 @@ int main(void) {
                             InitMap(&cityMap, inPacket.map_seed);
                             SpawnDrones(drones, MAX_DRONE_COUNT);
                             plane.plane_class = selectedClass;
+                            plane.skin_id = selectedSkin;
                             InitPlayerState(&plane);
                             plane.plane_respawns_left = 3;
                         } else if (localRound == 3) {
-                            LobbyClientPacket req = { .type = PACKET_LOBBY, .action = LOBBY_LOGIN, .room_id = (int8_t)currentRoom, .plane_class = selectedClass };
+                            LobbyClientPacket req = {
+                                .type = PACKET_LOBBY, .action = LOBBY_LOGIN,
+                                .room_id = (int8_t)currentRoom, .plane_class = selectedClass,
+                                .skin_id = selectedSkin, .city_type = selectedCity
+                            };
                             strncpy(req.username, username, MAX_USERNAME_LEN - 1);
                             sendto(netSocket, &req, sizeof(req), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
                         }
@@ -320,6 +413,7 @@ int main(void) {
                         remotePlayers[i].is_drone    = inPacket.players[i].is_drone;
                         remotePlayers[i].team        = inPacket.players[i].team;
                         remotePlayers[i].plane_class = inPacket.players[i].plane_class;
+                        remotePlayers[i].skin_id     = inPacket.players[i].skin_id;
                     }
 
                     for (int i = 0; i < MAX_PROJECTILES; i++) {
@@ -353,8 +447,13 @@ int main(void) {
                     }
 
                     for (int b = 0; b < cityMap.building_count; b++) {
+                        bool wasDestroyed = cityMap.buildings[b].is_destroyed;
                         cityMap.buildings[b].hp = (int)inPacket.building_hp[b];
                         cityMap.buildings[b].is_destroyed = (inPacket.building_hp[b] == 0);
+                        if (!wasDestroyed && cityMap.buildings[b].is_destroyed) {
+                            SpawnExplosion(explosions, cityMap.buildings[b].position);
+                            PlaySound(sfxBoom);
+                        }
                     }
                 }
             }
@@ -364,11 +463,22 @@ int main(void) {
 
         // --- 3. AFFICHAGE ---
         BeginDrawing();
-            ClearBackground(SKYBLUE);
+            Color skyCol = (cityMap.city_type == CITY_TOKYO) ? (Color){ 20, 24, 52, 255 } :
+                           ((cityMap.city_type == CITY_DUBAI) ? (Color){ 135, 195, 250, 255 } : SKYBLUE);
+            ClearBackground(skyCol);
 
             BeginMode3D(camera);
                 DrawMap(&cityMap);
                 DrawDrones(drones, MAX_DRONE_COUNT);
+
+                for (int e = 0; e < MAX_EXPLOSIONS; e++) {
+                    if (explosions[e].active) {
+                        float p = explosions[e].timer / explosions[e].max_time;
+                        float rad = 4.0f + p * 22.0f;
+                        DrawSphere(explosions[e].pos, rad, Fade(ORANGE, 1.0f - p));
+                        DrawSphereWires(explosions[e].pos, rad * 1.15f, 6, 6, Fade(YELLOW, 1.0f - p));
+                    }
+                }
 
                 if (status == STATUS_PLAYING || status == STATUS_PAUSED) {
                     if (plane.is_alive) {
@@ -395,19 +505,25 @@ int main(void) {
                 }
             EndMode3D();
 
+            // Correctif du bug à 180° : on vérifie que le joueur est DEVANT la caméra (Produit Scalaire > 0)
             if (status == STATUS_PLAYING || status == STATUS_PAUSED) {
+                Vector3 camForward = Vector3Subtract(camera.target, camera.position);
                 for (int i = 0; i < MAX_CLIENTS; i++) {
                     if (i == latestServerData.your_id) continue;
                     if (latestServerData.connected[i] && remotePlayers[i].is_alive) {
                         Vector3 tagPos = remotePlayers[i].position;
                         tagPos.y += 7.5f;
-                        Vector2 screenPos = GetWorldToScreen(tagPos, camera);
-                        if (screenPos.x > 0 && screenPos.x < GetScreenWidth() && screenPos.y > 0 && screenPos.y < GetScreenHeight()) {
-                            const char *pName = latestServerData.players[i].username;
-                            int tw = MeasureText(pName, 16);
-                            Color col = (latestServerData.players[i].team == 0) ? LIME : RED;
-                            DrawRectangle((int)screenPos.x - tw / 2 - 4, (int)screenPos.y - 2, tw + 8, 20, Fade(BLACK, 0.6f));
-                            DrawText(pName, (int)screenPos.x - tw / 2, (int)screenPos.y, 16, col);
+                        Vector3 toTarget = Vector3Subtract(tagPos, camera.position);
+
+                        if (Vector3DotProduct(camForward, toTarget) > 0.0f) {
+                            Vector2 screenPos = GetWorldToScreen(tagPos, camera);
+                            if (screenPos.x > 0 && screenPos.x < GetScreenWidth() && screenPos.y > 0 && screenPos.y < GetScreenHeight()) {
+                                const char *pName = latestServerData.players[i].username;
+                                int tw = MeasureText(pName, 16);
+                                Color col = (latestServerData.players[i].team == 0) ? LIME : RED;
+                                DrawRectangle((int)screenPos.x - tw / 2 - 4, (int)screenPos.y - 2, tw + 8, 20, Fade(BLACK, 0.6f));
+                                DrawText(pName, (int)screenPos.x - tw / 2, (int)screenPos.y, 16, col);
+                            }
                         }
                     }
                 }
@@ -442,32 +558,52 @@ int main(void) {
             } else {
                 int joinRoomId = -1;
                 MenuCommand cmd = DrawMenu(&status, currentRoom, connectedInRoom, &joinRoomId,
-                                           username, accountLoaded, &selectedClass, accountXp, accountGems);
+                                           username, accountLoaded, &selectedClass, &selectedSkin, &selectedCity,
+                                           accountXp, accountGems);
 
                 if (cmd == MENU_CMD_LOGIN) {
                     accountLoaded = false;
-                    LobbyClientPacket req = { .type = PACKET_LOBBY, .action = LOBBY_LOGIN, .room_id = (int8_t)currentRoom, .plane_class = selectedClass };
+                    LobbyClientPacket req = {
+                        .type = PACKET_LOBBY, .action = LOBBY_LOGIN, .room_id = (int8_t)currentRoom,
+                        .plane_class = selectedClass, .skin_id = selectedSkin, .city_type = selectedCity
+                    };
                     strncpy(req.username, username, MAX_USERNAME_LEN - 1);
                     sendto(netSocket, &req, sizeof(req), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
                 }
                 else if (cmd == MENU_CMD_SELECT_CLASS) {
                     plane.plane_class = selectedClass;
-                    LobbyClientPacket req = { .type = PACKET_LOBBY, .action = LOBBY_SET_CLASS, .room_id = (int8_t)currentRoom, .plane_class = selectedClass };
+                    plane.skin_id = selectedSkin;
+                    LobbyClientPacket req = {
+                        .type = PACKET_LOBBY, .action = LOBBY_SET_CLASS, .room_id = (int8_t)currentRoom,
+                        .plane_class = selectedClass, .skin_id = selectedSkin, .city_type = selectedCity
+                    };
                     strncpy(req.username, username, MAX_USERNAME_LEN - 1);
                     sendto(netSocket, &req, sizeof(req), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
                 }
+                else if (cmd == MENU_CMD_SELECT_CITY) {
+                    InitMap(&cityMap, 133740u + selectedCity);
+                }
                 else if (cmd == MENU_CMD_CREATE_ROOM) {
-                    LobbyClientPacket req = { .type = PACKET_LOBBY, .action = LOBBY_CREATE, .room_id = -1, .plane_class = selectedClass };
+                    LobbyClientPacket req = {
+                        .type = PACKET_LOBBY, .action = LOBBY_CREATE, .room_id = -1,
+                        .plane_class = selectedClass, .skin_id = selectedSkin, .city_type = selectedCity
+                    };
                     strncpy(req.username, username, MAX_USERNAME_LEN - 1);
                     sendto(netSocket, &req, sizeof(req), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
                 }
                 else if (cmd == MENU_CMD_JOIN_ROOM && joinRoomId >= 0 && joinRoomId < MAX_ROOMS) {
-                    LobbyClientPacket req = { .type = PACKET_LOBBY, .action = LOBBY_JOIN, .room_id = (int8_t)joinRoomId, .plane_class = selectedClass };
+                    LobbyClientPacket req = {
+                        .type = PACKET_LOBBY, .action = LOBBY_JOIN, .room_id = (int8_t)joinRoomId,
+                        .plane_class = selectedClass, .skin_id = selectedSkin, .city_type = selectedCity
+                    };
                     strncpy(req.username, username, MAX_USERNAME_LEN - 1);
                     sendto(netSocket, &req, sizeof(req), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
                 }
                 else if (cmd == MENU_CMD_LEAVE_ROOM) {
-                    LobbyClientPacket req = { .type = PACKET_LOBBY, .action = LOBBY_LEAVE, .room_id = (int8_t)currentRoom, .plane_class = selectedClass };
+                    LobbyClientPacket req = {
+                        .type = PACKET_LOBBY, .action = LOBBY_LEAVE, .room_id = (int8_t)currentRoom,
+                        .plane_class = selectedClass, .skin_id = selectedSkin, .city_type = selectedCity
+                    };
                     strncpy(req.username, username, MAX_USERNAME_LEN - 1);
                     sendto(netSocket, &req, sizeof(req), 0, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
                     currentRoom = -1;
@@ -482,10 +618,10 @@ int main(void) {
                     memset(projectile, 0, sizeof(projectile));
                     memset(remoteHasTarget, 0, sizeof(remoteHasTarget));
                     plane.plane_class = selectedClass;
+                    plane.skin_id = selectedSkin;
                     plane.plane_respawns_left = 3;
                     InitPlayerState(&plane);
-                    int seedRoom = (currentRoom != -1) ? currentRoom : 0;
-                    InitMap(&cityMap, 133742u + (unsigned int)(seedRoom * 1000));
+                    InitMap(&cityMap, 133740u + selectedCity);
                     SpawnDrones(drones, MAX_DRONE_COUNT);
                 }
             }
@@ -493,6 +629,9 @@ int main(void) {
     }
 
     if (IsCursorHidden()) EnableCursor();
+    UnloadSound(sfxShoot);
+    UnloadSound(sfxBoom);
+    CloseAudioDevice();
     close(netSocket);
     CloseWindow();
     return 0;

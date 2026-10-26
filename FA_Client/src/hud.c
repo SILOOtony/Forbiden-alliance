@@ -26,7 +26,6 @@ void DrawWeaponSlots(PlayerState *state) {
         Weapon *w = &state->weapons[i];
         Rectangle slotRect = { (float)(startX + i * (slotWidth + spacing)), (float)startY, (float)slotWidth, (float)slotHeight };
 
-        // Empêche le clic de tir en vol de cliquer sur les slots quand le curseur est masqué
         if (!IsCursorHidden() && CheckCollisionPointRec(mousePos, slotRect) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             state->current_slot = i;
         }
@@ -66,7 +65,7 @@ void DrawHpBar(const PlayerState *state) {
 
 void DrawCityTopBar(const GameMap *map, uint8_t currentRound, uint16_t timeLeft, bool isAttacker) {
     int screenW = GetScreenWidth();
-    int barW = 520;
+    int barW = 560;
     int barH = 30;
     int barX = (screenW - barW) / 2;
     int barY = 18;
@@ -80,7 +79,7 @@ void DrawCityTopBar(const GameMap *map, uint8_t currentRound, uint16_t timeLeft,
     DrawRectangle(barX, barY, fillW, barH, barColor);
     DrawRectangleLines(barX, barY, barW, barH, RAYWHITE);
 
-    const char *cityTxt = TextFormat("VILLE : %.1f%% (%d batiments restants)", pct, remaining);
+    const char *cityTxt = TextFormat("%s : %.1f%% (%d batiments restants)", GetCityName(map->city_type), pct, remaining);
     int txtW = MeasureText(cityTxt, 20);
     DrawText(cityTxt, barX + (barW - txtW) / 2, barY + 5, 20, WHITE);
 

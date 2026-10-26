@@ -129,35 +129,36 @@ static void SanitizeUsername(const char *in, char *out, size_t max_len) {
     if (j == 0) strcpy(out, "pilote");
 }
 
-static void SaveAccountJSON(const char *clean_user, uint8_t plane_class, int xp, int gems) {
+static void SaveAccountJSON(const char *clean_user, uint8_t plane_class, uint8_t skin_id, int xp, int gems) {
     mkdir("FA_Server", 0755);
     mkdir("FA_Server/accounts", 0755);
     char path[128];
     snprintf(path, sizeof(path), "FA_Server/accounts/%s.json", clean_user);
     FILE *f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "{\n  \"username\": \"%s\",\n  \"plane_class\": %u,\n  \"xp\": %d,\n  \"gems\": %d\n}\n",
-            clean_user, (unsigned int)plane_class, xp, gems);
+    fprintf(f, "{\n  \"username\": \"%s\",\n  \"plane_class\": %u,\n  \"skin_id\": %u,\n  \"xp\": %d,\n  \"gems\": %d\n}\n",
+            clean_user, (unsigned int)plane_class, (unsigned int)skin_id, xp, gems);
     fclose(f);
 }
 
-static void LoadOrCreateAccountJSON(const char *raw_user, char *clean_out, uint8_t *out_class, int *out_xp, int *out_gems) {
+static void LoadOrCreateAccountJSON(const char *raw_user, char *clean_out, uint8_t *out_class, uint8_t *out_skin, int *out_xp, int *out_gems) {
     SanitizeUsername(raw_user, clean_out, MAX_USERNAME_LEN);
     mkdir("FA_Server", 0755);
     mkdir("FA_Server/accounts", 0755);
     char path[128];
     snprintf(path, sizeof(path), "FA_Server/accounts/%s.json", clean_out);
-    *out_class = 0; *out_xp = 0; *out_gems = 0;
+    *out_class = 0; *out_skin = 0; *out_xp = 0; *out_gems = 0;
     FILE *f = fopen(path, "r");
     if (!f) {
-        SaveAccountJSON(clean_out, 0, 0, 0);
+        SaveAccountJSON(clean_out, 0, 0, 0, 0);
         printf("[Compte JSON] Nouveau compte cree : %s\n", path);
         return;
     }
     char line[256];
     while (fgets(line, sizeof(line), f)) {
-        unsigned int cls = 0; int val = 0;
-        if (sscanf(line, " \"plane_class\": %u", &cls) == 1) { if (cls <= 2) *out_class = (uint8_t)cls; }
+        unsigned int uval = 0; int val = 0;
+        if (sscanf(line, " \"plane_class\": %u", &uval) == 1) { if (uval <= 2) *out_class = (uint8_t)uval; }
+        else if (sscanf(line, " \"skin_id\": %u", &uval) == 1) { if (uval <= 4) *out_skin = (uint8_t)uval; }
         else if (sscanf(line, " \"xp\": %d", &val) == 1) *out_xp = val;
         else if (sscanf(line, " \"gems\": %d", &val) == 1) *out_gems = val;
     }
@@ -177,12 +178,12 @@ static void RewardMatchPlayersJSON(GameRoom *room) {
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (!room->clients[i].connected) continue;
         char cleanUser[MAX_USERNAME_LEN];
-        uint8_t cls = 0; int xp = 0, gems = 0;
-        LoadOrCreateAccountJSON(room->clients[i].state.username, cleanUser, &cls, &xp, &gems);
+        uint8_t cls = 0, skin = 0; int xp = 0, gems = 0;
+        LoadOrCreateAccountJSON(room->clients[i].state.username, cleanUser, &cls, &skin, &xp, &gems);
         uint8_t team = (i < 5) ? 0 : 1;
         int gainedXp = 50 + (int)room->team_buildings_destroyed[team] * 15 + ((winner == (int)team) ? 100 : 0);
         int gainedGems = (winner == (int)team) ? 25 : 10;
-        SaveAccountJSON(cleanUser, cls, xp + gainedXp, gems + gainedGems);
+        SaveAccountJSON(cleanUser, cls, skin, xp + gainedXp, gems + gainedGems);
         printf("[JSON XP] %s gagne +%d XP et +%d Gemmes !\n", cleanUser, gainedXp, gainedGems);
     }
 }
@@ -210,7 +211,8 @@ static void StartRoomRound(GameRoom *room, uint8_t round_num) {
 }
 
 static void ResetRoom(GameRoom *room, int room_index) {
-    room->map_seed = 133742u + (unsigned int)(room_index * 1000);
+    // Chaque room a une ville par défaut (Room 1=Paris, 2=New York, 3=Tokyo, 4=Dubaï) modifiable par le créateur
+    room->map_seed = 133740u + (unsigned int)(room_index % 4);
     memset(room->clients, 0, sizeof(room->clients));
     room->had_players = false;
     room->server_seq = 0;
@@ -270,8 +272,8 @@ static int RegisterOrUpdateClientInRoom(GameRoom *room, int room_id, struct sock
             strcpy(c->state.username, "pilote");
             InitServerPlayerWeapons(c);
             room->had_players = true;
-            printf("[+] Room #%d : Joueur #%d rejoint (%s:%d)\n",
-                   room_id + 1, i, inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+            printf("[+] Room #%d (%s) : Joueur #%d rejoint (%s:%d)\n",
+                   room_id + 1, GetCityName(room->map.city_type), i, inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
             return i;
         }
     }
@@ -296,8 +298,8 @@ int main(void) {
     GameRoom rooms[MAX_ROOMS];
     for (int r = 0; r < MAX_ROOMS; r++) ResetRoom(&rooms[r], r);
 
-    printf("=== Serveur AUTORITAIRE (%d Rooms 5v5) demarre sur UDP %d ===\n", MAX_ROOMS, SERVER_PORT);
-    printf("Tailles -> LobbyClient: %zu o | GameClient (Autoritaire): %zu o | GameServer Base: %zu o\n",
+    printf("=== Serveur AUTORITAIRE (%d Rooms 5v5 - Villes & Skins) demarre sur UDP %d ===\n", MAX_ROOMS, SERVER_PORT);
+    printf("Tailles -> LobbyClient: %zu o | GameClient: %zu o | GameServer Base: %zu o\n",
            sizeof(LobbyClientPacket), sizeof(ClientPacket), SERVER_PACKET_BASE_SIZE);
 
     double previousTime = GetCurrentTimeSec();
@@ -325,14 +327,16 @@ int main(void) {
                 lobbyIn.username[MAX_USERNAME_LEN - 1] = '\0';
 
                 char cleanUser[MAX_USERNAME_LEN];
-                uint8_t savedClass = 0; int xp = 0, gems = 0;
-                LoadOrCreateAccountJSON(lobbyIn.username, cleanUser, &savedClass, &xp, &gems);
+                uint8_t savedClass = 0, savedSkin = 0; int xp = 0, gems = 0;
+                LoadOrCreateAccountJSON(lobbyIn.username, cleanUser, &savedClass, &savedSkin, &xp, &gems);
 
                 LobbyServerPacket lobbyOut = {
                     .type = PACKET_LOBBY,
                     .room_id = lobbyIn.room_id,
                     .connected_count = 0,
                     .plane_class = savedClass,
+                    .skin_id = savedSkin,
+                    .city_type = lobbyIn.city_type % 4,
                     .account_loaded = true,
                     .xp = xp,
                     .gems = gems
@@ -341,8 +345,10 @@ int main(void) {
 
                 if (lobbyIn.action == LOBBY_SET_CLASS) {
                     uint8_t newClass = (lobbyIn.plane_class <= 2) ? lobbyIn.plane_class : 0;
-                    SaveAccountJSON(cleanUser, newClass, xp, gems);
+                    uint8_t newSkin  = (lobbyIn.skin_id <= 4) ? lobbyIn.skin_id : 0;
+                    SaveAccountJSON(cleanUser, newClass, newSkin, xp, gems);
                     lobbyOut.plane_class = newClass;
+                    lobbyOut.skin_id = newSkin;
                 }
                 else if (lobbyIn.action == LOBBY_LEAVE) {
                     RemoveClientFromOtherRooms(rooms, -1, senderAddr);
@@ -354,7 +360,10 @@ int main(void) {
                     for (int r = 0; r < MAX_ROOMS; r++) if (CountRoomPlayers(&rooms[r]) == 0) { chosen = r; break; }
                     if (chosen == -1) for (int r = 0; r < MAX_ROOMS; r++) if (CountRoomPlayers(&rooms[r]) < MAX_CLIENTS) { chosen = r; break; }
                     if (chosen != -1 && RegisterOrUpdateClientInRoom(&rooms[chosen], chosen, senderAddr, now) != -1) {
+                        rooms[chosen].map_seed = 133740u + (unsigned int)(lobbyIn.city_type % 4);
+                        StartRoomRound(&rooms[chosen], 1);
                         lobbyOut.room_id = (int8_t)chosen;
+                        lobbyOut.city_type = rooms[chosen].map.city_type;
                         lobbyOut.connected_count = CountRoomPlayers(&rooms[chosen]);
                     }
                 }
@@ -364,6 +373,7 @@ int main(void) {
                         RemoveClientFromOtherRooms(rooms, r, senderAddr);
                         if (RegisterOrUpdateClientInRoom(&rooms[r], r, senderAddr, now) != -1) {
                             lobbyOut.room_id = (int8_t)r;
+                            lobbyOut.city_type = rooms[r].map.city_type;
                             lobbyOut.connected_count = CountRoomPlayers(&rooms[r]);
                         }
                     }
@@ -371,6 +381,7 @@ int main(void) {
 
                 if (lobbyOut.room_id >= 0 && lobbyOut.room_id < MAX_ROOMS) {
                     lobbyOut.connected_count = CountRoomPlayers(&rooms[lobbyOut.room_id]);
+                    lobbyOut.city_type = rooms[lobbyOut.room_id].map.city_type;
                 }
                 sendto(sock, &lobbyOut, sizeof(lobbyOut), 0, (struct sockaddr *)&senderAddr, senderLen);
             }
@@ -400,6 +411,10 @@ int main(void) {
                             }
                         }
                     }
+                    if (r >= 0 && r < MAX_ROOMS && CountRoomPlayers(&rooms[r]) == 0) {
+                        rooms[r].map_seed = 133740u + (unsigned int)(inPacket.city_type % 4);
+                        StartRoomRound(&rooms[r], 1);
+                    }
                 }
                 if (r < 0 || r >= MAX_ROOMS) continue;
 
@@ -414,6 +429,7 @@ int main(void) {
                 uint8_t team = (slot < 5) ? 0 : 1;
                 bool is_attacker = (room->current_round == 1) ? (team == 1) : (team == 0);
                 client->state.team = team;
+                client->state.skin_id = (inPacket.skin_id <= 4) ? inPacket.skin_id : 0;
                 SanitizeUsername(inPacket.username, client->state.username, sizeof(client->state.username));
 
                 uint8_t reqClass = (inPacket.plane_class <= 2) ? inPacket.plane_class : 0;
@@ -427,7 +443,6 @@ int main(void) {
                     InitServerPlayerWeapons(client);
                 }
 
-                // A. GESTION AUTORITAIRE DES DEMANDES DE RÉAPPARITION ([R] Avion / [E] Drone)
                 if (!client->state.is_alive && room->current_round <= 2) {
                     if (inPacket.respawn_cmd == RESPAWN_PLANE && client->state.respawns_left > 0) {
                         client->state.respawns_left--;
@@ -456,7 +471,6 @@ int main(void) {
                     }
                 }
 
-                // B. MISE À JOUR DE LA POSITION ET DES TIRS AUTORITAIRES SI LE JOUEUR EST EN VIE
                 if (client->state.is_alive && room->current_round <= 2) {
                     client->state.position = inPacket.position;
                     client->state.pitch    = inPacket.pitch;
@@ -473,7 +487,6 @@ int main(void) {
                                     break;
                                 }
                             }
-                            // Recycle le projectile le plus ancien si les 15 sont déjà en vol
                             if (chosenSlot == -1) {
                                 chosenSlot = 0;
                                 float minLife = client->projectiles[0].lifetime;

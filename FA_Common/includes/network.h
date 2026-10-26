@@ -30,8 +30,8 @@ typedef enum {
 
 typedef enum {
     RESPAWN_NONE  = 0,
-    RESPAWN_PLANE = 1, // Touche [R]
-    RESPAWN_DRONE = 2  // Touche [E]
+    RESPAWN_PLANE = 1,
+    RESPAWN_DRONE = 2
 } RespawnCommand;
 
 static inline int16_t QuantizeCoord(float v) {
@@ -56,6 +56,7 @@ typedef struct {
     bool is_drone;
     uint8_t team;
     uint8_t plane_class;
+    uint8_t skin_id;
     uint8_t respawns_left;
     char username[16];
 } NetPlayer;
@@ -77,12 +78,13 @@ typedef struct {
     uint8_t flags;
 } NetDrone;
 
-// --- PAQUETS DE ROOM & COMPTE JSON ---
 typedef struct {
     uint8_t type;
     uint8_t action;
     int8_t room_id;
     uint8_t plane_class;
+    uint8_t skin_id;
+    uint8_t city_type;
     char username[MAX_USERNAME_LEN];
 } LobbyClientPacket;
 
@@ -91,13 +93,14 @@ typedef struct {
     int8_t room_id;
     uint8_t connected_count;
     uint8_t plane_class;
+    uint8_t skin_id;
+    uint8_t city_type;
     bool account_loaded;
     int32_t xp;
     int32_t gems;
     char username[MAX_USERNAME_LEN];
 } LobbyServerPacket;
 
-// --- PAQUET CLIENT AUTORITAIRE (Ultra-léger : ~61 octets au lieu de 722 !) ---
 typedef struct {
     uint8_t type;
     int8_t room_id;
@@ -107,8 +110,10 @@ typedef struct {
     float yaw;
     float roll;
     uint8_t plane_class;
-    uint8_t fire_slot;    // 0 = aucun tir, 1..3 = demande de tir sur le slot 1, 2 ou 3
-    uint8_t respawn_cmd;  // 0 = rien, 1 = [R] Avion, 2 = [E] Drone
+    uint8_t skin_id;
+    uint8_t city_type;
+    uint8_t fire_slot;
+    uint8_t respawn_cmd;
     char username[16];
 } ClientPacket;
 
