@@ -1,7 +1,7 @@
 #pragma once
 #include <stdbool.h>
 
-#define MAX_WEAPON_SLOTS 3
+#define MAX_WEAPON_SLOTS 4
 
 typedef enum {
     PLANE_FIGHTER     = 0, // Chasseur Polyvalent (100 PV)
@@ -10,10 +10,11 @@ typedef enum {
 } PlaneClass;
 
 typedef enum {
-    WEAPON_ROCKET = 0,
-    WEAPON_AIR_TO_AIR = 1,
+    WEAPON_ROCKET        = 0,
+    WEAPON_AIR_TO_AIR    = 1,
     WEAPON_AIR_TO_GROUND = 2,
-    WEAPON_DRONE_BLASTER = 3
+    WEAPON_DRONE_BLASTER = 3,
+    WEAPON_FLARES        = 4
 } WeaponType;
 
 typedef struct {

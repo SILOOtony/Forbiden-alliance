@@ -297,16 +297,19 @@ void DrawPlanePlayer(const PlayerState *state) {
         uint8_t cls = (state->plane_class <= 2) ? state->plane_class : 0;
 
         if (state->is_drone) {
-            bool useAtt = state->is_attacker;
-            if ((useAtt && hasAttDroneMdl) || (!useAtt && hasDefDroneMdl) || hasAttDroneMdl) {
-                Model *dMdl = (useAtt && hasAttDroneMdl) ? &attDroneMdl : (hasDefDroneMdl ? &defDroneMdl : &attDroneMdl);
+            bool isAtt = state->is_attacker;
+            bool canDraw3D = isAtt ? (hasAttDroneMdl || hasDefDroneMdl) : (hasDefDroneMdl || hasAttDroneMdl);
+            if (canDraw3D) {
+                Model *mdl = isAtt ? (hasAttDroneMdl ? &attDroneMdl : &defDroneMdl)
+                                   : (hasDefDroneMdl ? &defDroneMdl : &attDroneMdl);
                 rlPushMatrix();
+                    // Le modèle du drone regarde vers +Z, alors que l'avant du joueur est -Z : on tourne de 180°
                     rlRotatef(180.0f, 0.0f, 1.0f, 0.0f);
-                    DrawModel(*dMdl, (Vector3){ 0.0f, 0.0f, 0.0f }, 3.8f, WHITE);
+                    DrawModel(*mdl, (Vector3){ 0.0f, -0.4f, 0.0f }, 1.7f, WHITE);
                 rlPopMatrix();
             } else {
-                DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 10.0f, 4.0f, 10.0f, MAROON);
-                DrawCubeWires((Vector3){ 0.0f, 0.0f, 0.0f }, 10.0f, 4.0f, 10.0f, GOLD);
+                DrawCube((Vector3){ 0.0f, 0.0f, 0.0f }, 5.0f, 1.8f, 5.0f, isAtt ? MAROON : DARKBLUE);
+                DrawCubeWires((Vector3){ 0.0f, 0.0f, 0.0f }, 5.0f, 1.8f, 5.0f, isAtt ? RED : SKYBLUE);
             }
         }
         else if (hasCustomModel[cls]) {

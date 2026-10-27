@@ -110,6 +110,7 @@ static void AssignSquadToGameRoom(LobbyRoom *sq, GameRoom *gr, int game_room_id,
             c->last_seen = now;
             c->last_move_time = now;
             c->session_token = GenerateSessionToken();
+            c->flare_timer = 0.0f;
             c->state.is_alive = true;
             c->state.respawns_left = 3;
             c->state.team = (chosenSlot < 5) ? 0 : 1;
@@ -151,7 +152,7 @@ int main(void) {
     GameRoom gameRooms[MAX_GAME_ROOMS];
     for (int r = 0; r < MAX_GAME_ROOMS; r++) ResetGameRoom(&gameRooms[r], r);
 
-    printf("=== Serveur ETAPE 10 Final (%d Escouades + %d GameRooms Modulaires) sur UDP %d ===\n",
+    printf("=== Serveur Forbidden Alliance (%d Escouades + %d GameRooms) sur UDP %d ===\n",
            MAX_LOBBY_ROOMS, MAX_GAME_ROOMS, SERVER_PORT);
 
     double previousTime = GetCurrentTimeSec();
@@ -169,6 +170,7 @@ int main(void) {
         socklen_t senderLen = sizeof(senderAddr);
         ssize_t received;
 
+        // --- 1. RÉCEPTION DES PAQUETS UDP ---
         while ((received = recvfrom(sock, recvBuffer, sizeof(recvBuffer), 0, (struct sockaddr *)&senderAddr, &senderLen)) > 0) {
             uint8_t packetType = recvBuffer[0];
 
@@ -384,6 +386,7 @@ int main(void) {
                     client->state.position = spawnPos;
                     client->last_move_time = now;
                     client->has_pos = true;
+                    client->flare_timer = 0.0f;
                     InitServerPlayerWeapons(client);
                 }
 
@@ -395,6 +398,7 @@ int main(void) {
                         client->state.hp = GetClassMaxHp(client->state.plane_class, false);
                         client->state.position = spawnPos;
                         client->last_move_time = now;
+                        client->flare_timer = 0.0f;
                         InitServerPlayerWeapons(client);
                     }
                     else if (inPacket.respawn_cmd == RESPAWN_DRONE && client->state.respawns_left == 0) {
@@ -409,6 +413,7 @@ int main(void) {
                                 client->state.hp = 100;
                                 client->state.position = room->drones[d].pos;
                                 client->last_move_time = now;
+                                client->flare_timer = 0.0f;
                                 InitServerPlayerWeapons(client);
                                 break;
                             }
@@ -449,8 +454,12 @@ int main(void) {
                     client->state.yaw   = inPacket.yaw;
                     client->state.roll  = inPacket.roll;
 
-                    if (inPacket.fire_slot >= 1 && inPacket.fire_slot <= MAX_WEAPON_SLOTS) {
-                        Weapon *w = &client->weapons[inPacket.fire_slot - 1];
+                    // Décodage du slot d'arme (bits 0..6) et du drapeau Lock-On à 100% (bit 7 = 0x80)
+                    uint8_t rawSlot = (uint8_t)(inPacket.fire_slot & 0x7F);
+                    bool clientLocked = ((inPacket.fire_slot & 0x80) != 0);
+
+                    if (rawSlot >= 1 && rawSlot <= MAX_WEAPON_SLOTS) {
+                        Weapon *w = &client->weapons[rawSlot - 1];
                         if (w->ammo > 0) {
                             int chosenSlot = -1;
                             for (int p = 0; p < MAX_PLAYER_PROJECTILE; p++) {
@@ -467,30 +476,64 @@ int main(void) {
                                 }
                             }
 
-                            Vector3 dir = {
-                                -cosf(client->state.pitch) * sinf(client->state.yaw),
-                                 sinf(client->state.pitch),
-                                -cosf(client->state.pitch) * cosf(client->state.yaw)
-                            };
-
-                            int8_t tKind = 0;
-                            int8_t tIdx = -1;
-                            if (w->type == WEAPON_AIR_TO_AIR) {
-                                FindHomingTarget(room, slot, client->state.position, dir, is_attacker, &tKind, &tIdx);
-                            }
-
                             w->ammo--;
-                            client->projectiles[chosenSlot] = (ServerProjectile){
-                                .position = client->state.position,
-                                .direction = dir,
-                                .speed = w->projectile_speed,
-                                .lifetime = 3.0f,
-                                .damage = w->damage,
-                                .type = (uint8_t)w->type,
-                                .active = true,
-                                .target_kind = tKind,
-                                .target_idx = tIdx
-                            };
+
+                            if (w->type == WEAPON_FLARES) {
+                                client->flare_timer = 2.5f;
+                                // Casse immédiatement le verrouillage de tous les missiles ennemis qui ciblaient ce joueur !
+                                for (int cIdx = 0; cIdx < MAX_CLIENTS; cIdx++) {
+                                    if (!room->clients[cIdx].connected) continue;
+                                    for (int pIdx = 0; pIdx < MAX_PLAYER_PROJECTILE; pIdx++) {
+                                        ServerProjectile *ep = &room->clients[cIdx].projectiles[pIdx];
+                                        if (ep->active && ep->type == WEAPON_AIR_TO_AIR &&
+                                            ep->target_kind == 1 && ep->target_idx == slot) {
+                                            ep->target_kind = 0;
+                                            ep->target_idx  = -1;
+                                        }
+                                    }
+                                }
+
+                                Vector3 flareDir = {
+                                     cosf(client->state.pitch) * sinf(client->state.yaw),
+                                    -sinf(client->state.pitch) - 0.35f,
+                                     cosf(client->state.pitch) * cosf(client->state.yaw)
+                                };
+                                client->projectiles[chosenSlot] = (ServerProjectile){
+                                    .position = client->state.position,
+                                    .direction = flareDir,
+                                    .speed = w->projectile_speed,
+                                    .lifetime = 1.8f,
+                                    .damage = 0,
+                                    .type = (uint8_t)WEAPON_FLARES,
+                                    .active = true,
+                                    .target_kind = 0,
+                                    .target_idx = -1
+                                };
+                            } else {
+                                Vector3 dir = {
+                                    -cosf(client->state.pitch) * sinf(client->state.yaw),
+                                     sinf(client->state.pitch),
+                                    -cosf(client->state.pitch) * cosf(client->state.yaw)
+                                };
+
+                                int8_t tKind = 0;
+                                int8_t tIdx = -1;
+                                if (w->type == WEAPON_AIR_TO_AIR && clientLocked) {
+                                    FindHomingTarget(room, slot, client->state.position, dir, is_attacker, &tKind, &tIdx);
+                                }
+
+                                client->projectiles[chosenSlot] = (ServerProjectile){
+                                    .position = client->state.position,
+                                    .direction = dir,
+                                    .speed = w->projectile_speed,
+                                    .lifetime = 3.0f,
+                                    .damage = w->damage,
+                                    .type = (uint8_t)w->type,
+                                    .active = true,
+                                    .target_kind = tKind,
+                                    .target_idx = tIdx
+                                };
+                            }
                         }
                     }
                 }

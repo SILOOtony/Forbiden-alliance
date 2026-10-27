@@ -52,6 +52,7 @@ typedef struct {
     uint32_t last_seq;
     NetPlayer state;
     bool has_pos;
+    float flare_timer; // Immunité aux missiles Air-Air pendant que les leurres sont actifs
     Weapon weapons[MAX_WEAPON_SLOTS];
     ServerProjectile projectiles[MAX_PLAYER_PROJECTILE];
 } ClientSlot;

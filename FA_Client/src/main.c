@@ -17,12 +17,13 @@
 #include "menu.h"
 #include "drone.h"
 #include "network.h"
+#include "camera_fx.h"
 
 #define SERVER_IP "127.0.0.1" // Mets "157.173.112.67" pour ton VPS
 #define TICK_RATE 60.0f
 #define TICK_DT (1.0f / TICK_RATE)
 #define MAX_EXPLOSIONS 24
-#define MAX_TRAIL_PARTICLES 160
+#define MAX_TRAIL_PARTICLES 180
 
 typedef struct {
     Vector3 pos;
@@ -42,9 +43,13 @@ typedef struct {
 
 static Sound CreateSynthSound(int type) {
     int sampleRate = 22050;
-    int sampleCount = (type == 0) ? (sampleRate / 6) :
-                      ((type == 1) ? (sampleRate / 2) :
-                       ((type == 2) ? (sampleRate / 10) : sampleRate));
+    int sampleCount = sampleRate / 6;
+    if (type == 1) sampleCount = sampleRate / 2;
+    else if (type == 2) sampleCount = sampleRate / 10;
+    else if (type == 3) sampleCount = sampleRate;
+    else if (type == 4) sampleCount = sampleRate / 18; // Hitmarker (clic sec)
+    else if (type == 5) sampleCount = sampleRate / 4;  // Kill / Destruction (accord métallique Valorant)
+
     short *samples = (short *)malloc((size_t)sampleCount * sizeof(short));
 
     for (int i = 0; i < sampleCount; i++) {
@@ -59,11 +64,20 @@ static Sound CreateSynthSound(int type) {
             samples[i] = (short)((noise * 0.65f + boom * 0.35f) * 20000.0f * env * env);
         } else if (type == 2) {
             samples[i] = (short)(sinf(2.0f * PI * 1350.0f * t) * 11000.0f * env);
-        } else {
+        } else if (type == 3) {
             float hum1 = sinf(2.0f * PI * 90.0f * t);
             float hum2 = sinf(2.0f * PI * 180.0f * t);
             float air  = (((float)(rand() % 2000) / 1000.0f) - 1.0f) * 0.25f;
             samples[i] = (short)((hum1 * 0.5f + hum2 * 0.25f + air) * 4500.0f);
+        } else if (type == 4) {
+            // Son Hitmarker (clic haute fréquence très net)
+            float click = sinf(2.0f * PI * 1950.0f * t) * 0.7f + sinf(2.0f * PI * 3100.0f * t) * 0.3f;
+            samples[i] = (short)(click * 16000.0f * env * env);
+        } else {
+            // Son Kill / Destruction (double note ascendante)
+            float freq = (i < sampleCount / 3) ? 880.0f : 1320.0f;
+            float chime = sinf(2.0f * PI * freq * t) * 0.7f + sinf(2.0f * PI * (freq * 1.5f) * t) * 0.3f;
+            samples[i] = (short)(chime * 15500.0f * env);
         }
     }
 
@@ -134,8 +148,17 @@ int main(void) {
     Sound sfxBoom   = CreateSynthSound(1);
     Sound sfxLock   = CreateSynthSound(2);
     Sound sfxEngine = CreateSynthSound(3);
+    Sound sfxHit    = CreateSynthSound(4);
+    Sound sfxKill   = CreateSynthSound(5);
+
     ExplosionFX explosions[MAX_EXPLOSIONS] = { 0 };
     TrailParticle trails[MAX_TRAIL_PARTICLES] = { 0 };
+    KillfeedEntry killfeed[MAX_KILLFEED] = { 0 };
+
+    float hitmarkerTimer = 0.0f;
+    bool hitmarkerIsKill = false;
+    float recentAttackTimer = 0.0f;
+    float roundBannerTimer = 0.0f;
 
     int netSocket = socket(AF_INET, SOCK_DGRAM, 0);
     int flags = fcntl(netSocket, F_GETFL, 0);
@@ -165,7 +188,7 @@ int main(void) {
     float roomHeartbeatTimer = 0.0f;
     uint8_t localRound = 1;
 
-    char username[MAX_USERNAME_LEN] = "tony";
+    char username[MAX_USERNAME_LEN] = "";
     char password[MAX_PASSWORD_LEN] = "1234";
     bool accountLoaded = false;
     bool authFailed = false;
@@ -181,16 +204,20 @@ int main(void) {
     uint8_t pendingRespawnCmd = RESPAWN_NONE;
 
     bool hasLockTarget = false;
+    int lockTargetKind = 0;
+    int lockTargetId = -1;
     Vector3 lockTargetWorldPos = { 0 };
     float lockTimer = 0.0f;
     float lockBeepTimer = 0.0f;
     bool incomingMissileAlert = false;
+    float flareActiveTimer = 0.0f;
 
     PlayerState remotePlayers[MAX_CLIENTS] = { 0 };
     Vector3 remoteTargetPos[MAX_CLIENTS] = { 0 };
     bool remoteHasTarget[MAX_CLIENTS] = { 0 };
 
     Projectile remoteProjectiles[MAX_PROJECTILES] = { 0 };
+    uint8_t remoteProjEncodedTarget[MAX_PROJECTILES] = { 0 };
 
     KeyBindings controls = InitKeyBinds();
     GameMap cityMap = { 0 };
@@ -203,6 +230,8 @@ int main(void) {
     plane.skin_id = selectedSkin;
     plane.plane_respawns_left = 3;
     InitPlayerState(&plane);
+    PlaneCameraFX camFX = { 0 };
+    InitPlaneCameraFX(&camFX, &plane);
 
     SendLobbyRequest(netSocket, &serverAddr, LOBBY_LOGIN, -1, selectedClass, selectedSkin, selectedCity, username, password);
 
@@ -234,20 +263,55 @@ int main(void) {
             if (IsKeyPressed(KEY_P)) status = STATUS_PAUSED;
 
             if (plane.is_alive && latestServerData.current_round <= 2) {
+                int maxSlots = plane.is_drone ? 1 : MAX_WEAPON_SLOTS;
                 if (IsKeyPressed(controls.bindings[ACTION_SLOT_1])) plane.current_slot = 0;
-                if (IsKeyPressed(controls.bindings[ACTION_SLOT_2])) plane.current_slot = 1;
-                if (IsKeyPressed(controls.bindings[ACTION_SLOT_3])) plane.current_slot = 2;
+                if (!plane.is_drone && IsKeyPressed(controls.bindings[ACTION_SLOT_2])) plane.current_slot = 1;
+                if (!plane.is_drone && IsKeyPressed(controls.bindings[ACTION_SLOT_3])) plane.current_slot = 2;
+                if (!plane.is_drone && IsKeyPressed(KEY_FOUR)) plane.current_slot = 3;
 
                 float wheel = GetMouseWheelMove();
                 if (wheel > 0) {
-                    plane.current_slot = (plane.current_slot - 1 + MAX_WEAPON_SLOTS) % MAX_WEAPON_SLOTS;
+                    plane.current_slot = (plane.current_slot - 1 + maxSlots) % maxSlots;
                 } else if (wheel < 0) {
-                    plane.current_slot = (plane.current_slot + 1) % MAX_WEAPON_SLOTS;
+                    plane.current_slot = (plane.current_slot + 1) % maxSlots;
                 }
 
+                // Raccourci rapide [F] pour larguer immédiatement des Leurres
+                if (!plane.is_drone && IsKeyPressed(KEY_F)) {
+                    int prevSlot = plane.current_slot;
+                    plane.current_slot = 3;
+                    if (SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE)) {
+                        pendingFireSlot = 4;
+                        flareActiveTimer = 2.5f;
+                        incomingMissileAlert = false;
+                        PlaySound(sfxShoot);
+                        for (int f = 0; f < 10; f++) {
+                            Vector3 spread = {
+                                plane.position.x + (float)((rand() % 10) - 5) * 0.5f,
+                                plane.position.y - 1.0f,
+                                plane.position.z + (float)((rand() % 10) - 5) * 0.5f
+                            };
+                            SpawnTrail(trails, spread, 1.4f, 1.2f, GOLD);
+                        }
+                    }
+                    plane.current_slot = prevSlot;
+                }
+
+                // Tir classique au clic gauche ou Espace
                 if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || IsKeyPressed(controls.bindings[ACTION_ATTACK]) || IsKeyPressed(KEY_SPACE)) {
                     if (SpawnProjectile(&plane, projectile, MAX_PLAYER_PROJECTILE)) {
-                        pendingFireSlot = (uint8_t)(plane.current_slot + 1);
+                        TriggerCameraRecoil(&camFX, plane.weapons[plane.current_slot].type);
+                        uint8_t slotNum = (uint8_t)(plane.current_slot + 1);
+                        if (plane.weapons[plane.current_slot].type == WEAPON_AIR_TO_AIR && hasLockTarget && lockTimer >= 1.0f) {
+                            slotNum |= 0x80;
+                        }
+                        if (plane.weapons[plane.current_slot].type == WEAPON_FLARES) {
+                            flareActiveTimer = 2.5f;
+                            incomingMissileAlert = false;
+                        } else {
+                            recentAttackTimer = 3.2f;
+                        }
+                        pendingFireSlot = slotNum;
                         PlaySound(sfxShoot);
                     }
                 }
@@ -271,6 +335,7 @@ int main(void) {
                                 drones[d].is_alive = false;
                                 memset(projectile, 0, sizeof(projectile));
                                 ReincarnateAsDrone(&plane, drones[d].pos);
+                                AddKillfeedEntry(killfeed, TextFormat("%s -> Reincarnation DRONE", username), SKYBLUE);
                                 break;
                             }
                         }
@@ -284,6 +349,24 @@ int main(void) {
         // --- 2. BOUCLE DE SIMULATION PAR TICKS (60 Hz) ---
         accumulator += frameTime;
         while (accumulator >= TICK_DT) {
+            if (flareActiveTimer > 0.0f) {
+                flareActiveTimer -= TICK_DT;
+                if (flareActiveTimer < 0.0f) flareActiveTimer = 0.0f;
+            }
+            if (hitmarkerTimer > 0.0f) {
+                hitmarkerTimer -= TICK_DT;
+                if (hitmarkerTimer < 0.0f) hitmarkerTimer = 0.0f;
+            }
+            if (recentAttackTimer > 0.0f) {
+                recentAttackTimer -= TICK_DT;
+                if (recentAttackTimer < 0.0f) recentAttackTimer = 0.0f;
+            }
+            if (roundBannerTimer > 0.0f) {
+                roundBannerTimer -= TICK_DT;
+                if (roundBannerTimer < 0.0f) roundBannerTimer = 0.0f;
+            }
+            UpdateKillfeed(killfeed, TICK_DT);
+
             for (int e = 0; e < MAX_EXPLOSIONS; e++) {
                 if (explosions[e].active) {
                     explosions[e].timer += TICK_DT;
@@ -302,6 +385,7 @@ int main(void) {
             if (status == STATUS_MENU) {
                 if (IsSoundPlaying(sfxEngine)) StopSound(sfxEngine);
                 menuCameraAngle += 1.2f * TICK_DT;
+                camera.up = (Vector3){ 0.0f, 1.0f, 0.0f }; camera.fovy = 60.0f;
                 UpdateMenuCamera(&camera, menuCameraAngle);
 
                 if (lobbyState.squad_id != -1) {
@@ -312,14 +396,14 @@ int main(void) {
                         roomHeartbeatTimer = 0.25f;
                     }
                 }
-            } 
+            }
             else if (status == STATUS_PLAYING || status == STATUS_PAUSED) {
-                int16_t dummy_bldg_dmg[MAX_BUILDINGS] = { 0 };
+                int16_t local_bldg_dmg[MAX_BUILDINGS] = { 0 };
                 bool wasAlive = plane.is_alive;
 
                 if (status == STATUS_PLAYING && plane.is_alive && latestServerData.current_round <= 2) {
                     UpdatePlayerMovement(&plane, &controls, TICK_DT);
-                    UpdatePlaneCamera(&camera, &plane);
+                    UpdatePlaneCameraFX(&camera, &camFX, &plane, TICK_DT);
                     UpdateWeaponsReload(plane.weapons, TICK_DT);
 
                     if (!IsSoundPlaying(sfxEngine)) PlaySound(sfxEngine);
@@ -333,12 +417,19 @@ int main(void) {
                     Vector3 exhaustPos = Vector3Subtract(plane.position, Vector3Scale(fwd, 4.5f));
                     SpawnTrail(trails, exhaustPos, plane.is_drone ? 0.6f : 0.9f, 0.45f, LIGHTGRAY);
 
-                    if (CheckPlaneMapCollision(&plane, &cityMap, dummy_bldg_dmg) && wasAlive) {
+                    if (flareActiveTimer > 0.0f) {
+                        SpawnTrail(trails, exhaustPos, 1.35f, 0.75f, GOLD);
+                    }
+
+                    if (CheckPlaneMapCollision(&plane, &cityMap, local_bldg_dmg) && wasAlive) {
                         SpawnExplosion(explosions, plane.position);
                         PlaySound(sfxBoom);
                     }
 
                     hasLockTarget = false;
+                    int newLockKind = 0;
+                    int newLockId = -1;
+
                     if (plane.weapons[plane.current_slot].type == WEAPON_AIR_TO_AIR) {
                         float bestDot = 0.93f;
                         for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -351,6 +442,8 @@ int main(void) {
                                 if (dot > bestDot) {
                                     bestDot = dot;
                                     hasLockTarget = true;
+                                    newLockKind = 1;
+                                    newLockId = i;
                                     lockTargetWorldPos = remotePlayers[i].position;
                                 }
                             }
@@ -364,6 +457,8 @@ int main(void) {
                                 if (dot > bestDot) {
                                     bestDot = dot;
                                     hasLockTarget = true;
+                                    newLockKind = 2;
+                                    newLockId = d;
                                     lockTargetWorldPos = drones[d].pos;
                                 }
                             }
@@ -371,7 +466,12 @@ int main(void) {
                     }
 
                     if (hasLockTarget) {
-                        lockTimer += TICK_DT * 2.0f;
+                        if (newLockKind != lockTargetKind || newLockId != lockTargetId) {
+                            lockTargetKind = newLockKind;
+                            lockTargetId   = newLockId;
+                            lockTimer      = 0.0f;
+                        }
+                        lockTimer += TICK_DT * 1.85f;
                         if (lockTimer > 1.0f) lockTimer = 1.0f;
                         lockBeepTimer -= TICK_DT;
                         if (lockBeepTimer <= 0.0f) {
@@ -379,16 +479,20 @@ int main(void) {
                             lockBeepTimer = (lockTimer >= 1.0f) ? 0.14f : 0.32f;
                         }
                     } else {
-                        lockTimer = 0.0f;
+                        lockTargetKind = 0;
+                        lockTargetId   = -1;
+                        lockTimer      = 0.0f;
                     }
 
                     incomingMissileAlert = false;
-                    for (int p = 0; p < MAX_PROJECTILES; p++) {
-                        if (remoteProjectiles[p].active && remoteProjectiles[p].type == WEAPON_AIR_TO_AIR) {
-                            float dSq = Vector3DistanceSqr(remoteProjectiles[p].position, plane.position);
-                            if (dSq > 144.0f && dSq < (320.0f * 320.0f)) {
-                                incomingMissileAlert = true;
-                                break;
+                    if (flareActiveTimer <= 0.0f && latestServerData.your_id >= 0) {
+                        for (int p = 0; p < MAX_PROJECTILES; p++) {
+                            if (remoteProjectiles[p].active && remoteProjectiles[p].type == WEAPON_AIR_TO_AIR) {
+                                uint8_t encTarget = remoteProjEncodedTarget[p];
+                                if (encTarget == (uint8_t)(latestServerData.your_id + 1)) {
+                                    incomingMissileAlert = true;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -406,14 +510,38 @@ int main(void) {
                 }
 
                 for (int p = 0; p < MAX_PROJECTILES; p++) {
-                    if (remoteProjectiles[p].active && remoteProjectiles[p].type == WEAPON_AIR_TO_AIR) {
-                        SpawnTrail(trails, remoteProjectiles[p].position, 0.45f, 0.28f, SKYBLUE);
+                    if (remoteProjectiles[p].active) {
+                        if (remoteProjectiles[p].type == WEAPON_AIR_TO_AIR) {
+                            SpawnTrail(trails, remoteProjectiles[p].position, 0.45f, 0.28f, SKYBLUE);
+                        } else if (remoteProjectiles[p].type == WEAPON_FLARES) {
+                            SpawnTrail(trails, remoteProjectiles[p].position, 1.1f, 0.6f, GOLD);
+                        }
                     }
                 }
 
+                bool droneAliveBefore[MAX_DRONE_COUNT];
+                for (int d = 0; d < MAX_DRONE_COUNT; d++) droneAliveBefore[d] = drones[d].is_alive;
+
                 UpdateProjectiles(projectile, MAX_PLAYER_PROJECTILE, TICK_DT);
-                CheckProjectileMapCollisions(projectile, MAX_PLAYER_PROJECTILE, &cityMap, plane.is_attacker, dummy_bldg_dmg);
+                CheckProjectileMapCollisions(projectile, MAX_PLAYER_PROJECTILE, &cityMap, plane.is_attacker, local_bldg_dmg);
                 CheckProjectileDroneCollisions(projectile, MAX_PLAYER_PROJECTILE, drones, MAX_DRONE_COUNT, plane.is_attacker);
+
+                for (int b = 0; b < cityMap.building_count; b++) {
+                    if (local_bldg_dmg[b] > 0 && plane.is_attacker) {
+                        hitmarkerTimer = 0.20f;
+                        hitmarkerIsKill = false;
+                        PlaySound(sfxHit);
+                        break;
+                    }
+                }
+                for (int d = 0; d < MAX_DRONE_COUNT; d++) {
+                    if (droneAliveBefore[d] && !drones[d].is_alive) {
+                        hitmarkerTimer = 0.35f;
+                        hitmarkerIsKill = true;
+                        PlaySound(sfxKill);
+                        AddKillfeedEntry(killfeed, TextFormat("%s [ELIMINE] -> Drone Ennemi", username), LIME);
+                    }
+                }
 
                 if (currentGameRoom != -1 && sessionToken != 0) {
                     clientSeq++;
@@ -480,8 +608,10 @@ int main(void) {
                         latestServerData.your_id = -1;
                         lastServerSeq = 0;
                         localRound = 1;
+                        roundBannerTimer = 4.0f;
                         memset(projectile, 0, sizeof(projectile));
                         memset(remoteHasTarget, 0, sizeof(remoteHasTarget));
+                        memset(killfeed, 0, sizeof(killfeed));
                         plane.plane_class = selectedClass;
                         plane.skin_id = selectedSkin;
                         plane.plane_respawns_left = 3;
@@ -508,6 +638,39 @@ int main(void) {
                     uint8_t prevTeam = plane.team;
                     bool prevAttacker = plane.is_attacker;
                     bool firstConnect = (latestServerData.your_id == -1);
+                    if (firstConnect) {
+                        roundBannerTimer = 4.5f;
+                    }
+
+                    if (!firstConnect && inPacket.current_round == localRound && inPacket.current_round <= 2) {
+                        for (int i = 0; i < MAX_CLIENTS; i++) {
+                            if (i == inPacket.your_id || !inPacket.connected[i]) continue;
+                            bool wasPAlive = latestServerData.players[i].is_alive;
+                            int16_t oldHp  = latestServerData.players[i].hp;
+                            bool nowPAlive = inPacket.players[i].is_alive;
+                            int16_t newHp  = inPacket.players[i].hp;
+                            bool isEnemy   = (inPacket.players[i].team != plane.team);
+
+                            if (wasPAlive && !nowPAlive) {
+                                SpawnExplosion(explosions, inPacket.players[i].position);
+                                PlaySound(sfxBoom);
+                                if (isEnemy) {
+                                    AddKillfeedEntry(killfeed, TextFormat("[ELIMINATION] %s abattu !", inPacket.players[i].username), LIME);
+                                    if (recentAttackTimer > 0.0f) {
+                                        hitmarkerTimer = 0.35f;
+                                        hitmarkerIsKill = true;
+                                        PlaySound(sfxKill);
+                                    }
+                                } else {
+                                    AddKillfeedEntry(killfeed, TextFormat("[ALLIE] %s a ete abattu", inPacket.players[i].username), RED);
+                                }
+                            } else if (wasPAlive && nowPAlive && newHp < oldHp && isEnemy && recentAttackTimer > 0.0f) {
+                                hitmarkerTimer = 0.20f;
+                                hitmarkerIsKill = false;
+                                PlaySound(sfxHit);
+                            }
+                        }
+                    }
 
                     latestServerData = inPacket;
                     connectedInRoom = inPacket.connected_count;
@@ -526,6 +689,7 @@ int main(void) {
                         if (plane.is_alive && !me.is_alive) {
                             SpawnExplosion(explosions, plane.position);
                             PlaySound(sfxBoom);
+                            AddKillfeedEntry(killfeed, TextFormat("%s a ete detruit !", username), RED);
                         }
                         plane.hp = me.hp;
                         plane.is_alive = me.is_alive;
@@ -548,6 +712,8 @@ int main(void) {
                         memset(projectile, 0, sizeof(projectile));
                         memset(remoteHasTarget, 0, sizeof(remoteHasTarget));
                         if (localRound <= 2) {
+                            roundBannerTimer = 4.0f;
+                            AddKillfeedEntry(killfeed, "=== CHANGEMENT DE CAMP (MANCHE 2) ===", GOLD);
                             InitMap(&cityMap, inPacket.map_seed);
                             SpawnDrones(drones, MAX_DRONE_COUNT);
                             plane.plane_class = selectedClass;
@@ -594,25 +760,44 @@ int main(void) {
                                 DequantizeCoord(np.y),
                                 DequantizeCoord(np.z)
                             };
-                            remoteProjectiles[i].type   = (WeaponType)(np.type_and_active & 0x7F);
+                            remoteProjectiles[i].type   = (WeaponType)(np.type_and_active & 0x07);
+                            remoteProjEncodedTarget[i]  = (uint8_t)((np.type_and_active >> 3) & 0x0F);
                             remoteProjectiles[i].active = ((np.type_and_active & 0x80) != 0);
                         } else {
                             remoteProjectiles[i].active = false;
+                            remoteProjEncodedTarget[i]  = 0;
                         }
                     }
 
                     for (int d = 0; d < MAX_DRONE_COUNT; d++) {
-                        drones[d].pos = (Vector3){
+                        bool wasDroneAlive = drones[d].is_alive;
+                        bool nowDroneAlive = ((inPacket.drones[d].flags & 0x01) != 0);
+                        if (wasDroneAlive && !nowDroneAlive && drones[d].is_attacker != plane.is_attacker && recentAttackTimer > 0.0f) {
+                            hitmarkerTimer = 0.35f;
+                            hitmarkerIsKill = true;
+                            PlaySound(sfxKill);
+                            AddKillfeedEntry(killfeed, TextFormat("%s [ELIMINE] -> Drone Ennemi", username), LIME);
+                        }
+
+                        Vector3 newDronePos = {
                             DequantizeCoord(inPacket.drones[d].x),
                             DequantizeCoord(inPacket.drones[d].y),
                             DequantizeCoord(inPacket.drones[d].z)
                         };
+                        float ddx = newDronePos.x - drones[d].pos.x;
+                        float ddz = newDronePos.z - drones[d].pos.z;
+                        float dlen = sqrtf(ddx * ddx + ddz * ddz);
+                        if (dlen > 0.05f && dlen < 40.0f) {
+                            drones[d].direction = (Vector3){ ddx / dlen, 0.0f, ddz / dlen };
+                        }
+                        drones[d].pos = newDronePos;
+
                         drones[d].bullet_pos = (Vector3){
                             DequantizeCoord(inPacket.drones[d].bx),
                             DequantizeCoord(inPacket.drones[d].by),
                             DequantizeCoord(inPacket.drones[d].bz)
                         };
-                        drones[d].is_alive      = ((inPacket.drones[d].flags & 0x01) != 0);
+                        drones[d].is_alive      = nowDroneAlive;
                         drones[d].bullet_active = ((inPacket.drones[d].flags & 0x02) != 0);
                     }
 
@@ -623,6 +808,12 @@ int main(void) {
                         if (!wasDestroyed && cityMap.buildings[b].is_destroyed) {
                             SpawnExplosion(explosions, cityMap.buildings[b].position);
                             PlaySound(sfxBoom);
+                            AddKillfeedEntry(killfeed, "[VILLE] Batiment detruit (+15 XP)", plane.is_attacker ? GOLD : ORANGE);
+                            if (plane.is_attacker && recentAttackTimer > 0.0f) {
+                                hitmarkerTimer = 0.35f;
+                                hitmarkerIsKill = true;
+                                PlaySound(sfxKill);
+                            }
                         }
                     }
                 }
@@ -683,7 +874,6 @@ int main(void) {
                 if (status == STATUS_PLAYING || status == STATUS_PAUSED) {
                     if (plane.is_alive) {
                         DrawPlanePlayer(&plane);
-                        DrawCrossHair(&plane);
                     }
 
                     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -692,7 +882,7 @@ int main(void) {
                             DrawPlanePlayer(&remotePlayers[i]);
                             Vector3 markerPos = remotePlayers[i].position;
                             markerPos.y += 4.5f;
-                            Color teamColor = (latestServerData.players[i].team == 0) ? LIME : RED;
+                            Color teamColor = (latestServerData.players[i].team == plane.team) ? LIME : RED;
                             DrawSphere(markerPos, 1.2f, teamColor);
                         }
                     }
@@ -742,7 +932,7 @@ int main(void) {
                             if (screenPos.x > 0 && screenPos.x < GetScreenWidth() && screenPos.y > 0 && screenPos.y < GetScreenHeight()) {
                                 const char *pName = latestServerData.players[i].username;
                                 int tw = MeasureText(pName, 16);
-                                Color col = (latestServerData.players[i].team == 0) ? LIME : RED;
+                                Color col = (latestServerData.players[i].team == plane.team) ? LIME : RED;
                                 DrawRectangle((int)screenPos.x - tw / 2 - 4, (int)screenPos.y - 2, tw + 8, 20, Fade(BLACK, 0.6f));
                                 DrawText(pName, (int)screenPos.x - tw / 2, (int)screenPos.y, 16, col);
                             }
@@ -756,8 +946,18 @@ int main(void) {
             if (status == STATUS_PLAYING) {
                 DrawCityTopBar(&cityMap, latestServerData.current_round, latestServerData.round_time_left, plane.is_attacker);
 
+                if (plane.is_alive && latestServerData.current_round <= 2) {
+                    DrawCrossHair(&plane);
+                }
+                Vector2 chScreen = { (float)GetScreenWidth() * 0.5f, (float)GetScreenHeight() * 0.5f };
+                DrawHitmarker(chScreen, hitmarkerTimer, hitmarkerIsKill);
+
                 Vector2 lockScreenPos = hasLockTarget ? GetWorldToScreen(lockTargetWorldPos, camera) : (Vector2){ 0, 0 };
                 DrawLockOnHUD(hasLockTarget, lockScreenPos, lockTimer, incomingMissileAlert);
+
+                DrawTacticalRadar(&plane, &latestServerData, remotePlayers, drones, MAX_DRONE_COUNT, flareActiveTimer);
+                DrawKillfeed(killfeed);
+                DrawRoundBanner(latestServerData.current_round, plane.is_attacker, roundBannerTimer);
 
                 const char *cName = (plane.plane_class == PLANE_INTERCEPTOR) ? "INTERCEPTEUR" :
                                     ((plane.plane_class == PLANE_BOMBER) ? "BOMBARDIER" : "CHASSEUR");
@@ -765,7 +965,7 @@ int main(void) {
                 DrawText(TextFormat("ROOM #%d | MATCH #%d (%d/10) | Packet: %zu B | Pilote: %s (%s %d ELO) [%s]",
                          (lobbyState.squad_id != -1) ? (lobbyState.squad_id + 1) : 1,
                          currentGameRoom + 1, connectedInRoom, lastPacketSize, username,
-                         GetRankName(accountElo), accountElo, plane.is_drone ? "DRONE" : cName), 10, 80, 17, DARKGREEN);
+                         GetRankName(accountElo), accountElo, plane.is_drone ? "DRONE" : cName), 10, 80, 16, DARKGREEN);
 
                 DrawWeaponSlots(&plane);
                 DrawHpBar(&plane);
@@ -836,6 +1036,8 @@ int main(void) {
     UnloadSound(sfxBoom);
     UnloadSound(sfxLock);
     UnloadSound(sfxEngine);
+    UnloadSound(sfxHit);
+    UnloadSound(sfxKill);
     CloseAudioDevice();
     close(netSocket);
     CloseWindow();

@@ -58,6 +58,10 @@ Model LoadSafeDroneModel(const char *objPath, bool is_attacker) {
     float minX = 1e9f, minY = 1e9f, minZ = 1e9f;
     float maxX = -1e9f, maxY = -1e9f, maxZ = -1e9f;
 
+    // Correction de l'angle d'export TinkerCAD (-60 degres) pour aligner le nez du drone sur +Z
+    const float cosA =  0.5000000f; // cos(-60 deg)
+    const float sinA = -0.8660254f; // sin(-60 deg)
+
     char line[512];
     while (fgets(line, sizeof(line), f)) {
         char *p = line;
@@ -68,8 +72,11 @@ Model LoadSafeDroneModel(const char *objPath, bool is_attacker) {
                 vCap *= 2;
                 vList = (Vector3 *)realloc(vList, vCap * sizeof(Vector3));
             }
-            float x = 0.0f, y = 0.0f, z = 0.0f;
-            if (sscanf(p + 2, "%f %f %f", &x, &y, &z) == 3) {
+            float rawX = 0.0f, rawY = 0.0f, rawZ = 0.0f;
+            if (sscanf(p + 2, "%f %f %f", &rawX, &rawY, &rawZ) == 3) {
+                float x =  rawX * cosA + rawZ * sinA;
+                float y =  rawY;
+                float z = -rawX * sinA + rawZ * cosA;
                 vList[vCount++] = (Vector3){ x, y, z };
                 if (x < minX) minX = x; if (x > maxX) maxX = x;
                 if (y < minY) minY = y; if (y > maxY) maxY = y;
@@ -81,8 +88,11 @@ Model LoadSafeDroneModel(const char *objPath, bool is_attacker) {
                 vnCap *= 2;
                 vnList = (Vector3 *)realloc(vnList, vnCap * sizeof(Vector3));
             }
-            float nx = 0.0f, ny = 1.0f, nz = 0.0f;
-            if (sscanf(p + 3, "%f %f %f", &nx, &ny, &nz) == 3) {
+            float rnx = 0.0f, rny = 1.0f, rnz = 0.0f;
+            if (sscanf(p + 3, "%f %f %f", &rnx, &rny, &rnz) == 3) {
+                float nx =  rnx * cosA + rnz * sinA;
+                float ny =  rny;
+                float nz = -rnx * sinA + rnz * cosA;
                 vnList[vnCount++] = (Vector3){ nx, ny, nz };
             }
         }
@@ -142,7 +152,6 @@ Model LoadSafeDroneModel(const char *objPath, bool is_attacker) {
         return empty;
     }
 
-    // Centrage et normalisation automatique de la taille du drone (~2.5 unités)
     float cx = (minX + maxX) * 0.5f;
     float cy = (minY + maxY) * 0.5f;
     float cz = (minZ + maxZ) * 0.5f;
@@ -167,7 +176,7 @@ Model LoadSafeDroneModel(const char *objPath, bool is_attacker) {
 
     UploadMesh(&mesh, false);
     Model mdl = LoadModelFromMesh(mesh);
-    printf("[3D Drone OK] %s charge (%d triangles)\n", objPath, mesh.triangleCount);
+    printf("[3D Drone OK] %s charge et aligne (%d triangles)\n", objPath, mesh.triangleCount);
     fflush(stdout);
     return mdl;
 }

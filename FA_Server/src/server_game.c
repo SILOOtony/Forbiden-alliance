@@ -36,6 +36,7 @@ float GetClassMaxAllowedSpeed(uint8_t plane_class, bool is_drone) {
 }
 
 void InitServerPlayerWeapons(ClientSlot *c) {
+    InitWeaponSlotsForClass(c->weapons, (PlaneClass)c->state.plane_class);
     if (c->state.is_drone) {
         for (int i = 0; i < MAX_WEAPON_SLOTS; i++) {
             c->weapons[i] = (Weapon){
@@ -44,18 +45,6 @@ void InitServerPlayerWeapons(ClientSlot *c) {
                 .projectile_speed = 360.0f, .damage = 50
             };
         }
-    } else if (c->state.plane_class == PLANE_INTERCEPTOR) {
-        c->weapons[0] = (Weapon){ WEAPON_ROCKET, "Light Rockets", 16, 16, 1.0f, 0.0f, 360.0f, 25 };
-        c->weapons[1] = (Weapon){ WEAPON_AIR_TO_AIR, "Fast A2A", 10, 10, 1.4f, 0.0f, 520.0f, 65 };
-        c->weapons[2] = (Weapon){ WEAPON_AIR_TO_GROUND, "Light Bomb", 2, 2, 4.0f, 0.0f, 240.0f, 75 };
-    } else if (c->state.plane_class == PLANE_BOMBER) {
-        c->weapons[0] = (Weapon){ WEAPON_ROCKET, "Heavy Rockets", 12, 12, 2.0f, 0.0f, 260.0f, 50 };
-        c->weapons[1] = (Weapon){ WEAPON_AIR_TO_AIR, "Defense A2A", 8, 8, 2.5f, 0.0f, 380.0f, 45 };
-        c->weapons[2] = (Weapon){ WEAPON_AIR_TO_GROUND, "Mega Bomb", 8, 8, 2.5f, 0.0f, 220.0f, 160 };
-    } else {
-        c->weapons[0] = (Weapon){ WEAPON_ROCKET, "Rockets", 12, 12, 1.5f, 0.0f, 300.0f, 35 };
-        c->weapons[1] = (Weapon){ WEAPON_AIR_TO_AIR, "Air-to-Air", 6, 6, 2.5f, 0.0f, 420.0f, 55 };
-        c->weapons[2] = (Weapon){ WEAPON_AIR_TO_GROUND, "Air-to-Ground", 4, 4, 3.5f, 0.0f, 240.0f, 120 };
     }
 }
 
@@ -73,6 +62,7 @@ void StartRoomRound(GameRoom *room, uint8_t round_num) {
             room->clients[i].state.respawns_left = 3;
             room->clients[i].state.hp = GetClassMaxHp(room->clients[i].state.plane_class, false);
             room->clients[i].has_pos = false;
+            room->clients[i].flare_timer = 0.0f;
             memset(room->clients[i].projectiles, 0, sizeof(room->clients[i].projectiles));
             InitServerPlayerWeapons(&room->clients[i]);
         }
@@ -117,6 +107,8 @@ void FindHomingTarget(
         if (i == shooterSlot || !room->clients[i].connected || !room->clients[i].state.is_alive) continue;
         uint8_t tTeam = (i < 5) ? 0 : 1;
         if (tTeam == myTeam) continue;
+        // Si l'ennemi a activé ses leurres, il est impossible à verrouiller !
+        if (room->clients[i].flare_timer > 0.0f) continue;
 
         float dx = room->clients[i].state.position.x - startPos.x;
         float dy = room->clients[i].state.position.y - startPos.y;
@@ -208,6 +200,11 @@ void UpdateGameRoomTick(
             ClientSlot *c = &room->clients[i];
             if (!c->connected || !c->has_pos) continue;
 
+            if (c->flare_timer > 0.0f) {
+                c->flare_timer -= dt;
+                if (c->flare_timer < 0.0f) c->flare_timer = 0.0f;
+            }
+
             uint8_t team = (i < 5) ? 0 : 1;
             bool is_attacker = (room->current_round == 1) ? (team == 1) : (team == 0);
 
@@ -249,14 +246,21 @@ void UpdateGameRoomTick(
                     Vector3 targetPos = { 0 };
                     bool validTarget = false;
                     if (proj->target_kind == 1 && proj->target_idx >= 0 && proj->target_idx < MAX_CLIENTS) {
-                        if (room->clients[proj->target_idx].connected && room->clients[proj->target_idx].state.is_alive) {
-                            targetPos = room->clients[proj->target_idx].state.position;
+                        ClientSlot *tc = &room->clients[proj->target_idx];
+                        if (tc->connected && tc->state.is_alive && tc->flare_timer <= 0.0f) {
+                            targetPos = tc->state.position;
                             validTarget = true;
+                        } else {
+                            proj->target_kind = 0;
+                            proj->target_idx = -1;
                         }
                     } else if (proj->target_kind == 2 && proj->target_idx >= 0 && proj->target_idx < MAX_DRONE_COUNT) {
                         if (room->drones[proj->target_idx].is_alive) {
                             targetPos = room->drones[proj->target_idx].pos;
                             validTarget = true;
+                        } else {
+                            proj->target_kind = 0;
+                            proj->target_idx = -1;
                         }
                     }
 
@@ -292,6 +296,9 @@ void UpdateGameRoomTick(
                     proj->active = false;
                     continue;
                 }
+
+                // Les leurres ne font pas de dégâts aux bâtiments/avions
+                if (proj->type == WEAPON_FLARES) continue;
 
                 bool hit = false;
                 for (int b = 0; b < room->map.building_count; b++) {
@@ -394,11 +401,16 @@ void UpdateGameRoomTick(
         for (int p = 0; p < MAX_PLAYER_PROJECTILE; p++) {
             ServerProjectile *sp = &room->clients[i].projectiles[p];
             if (sp->active && activeProjCount < MAX_PROJECTILES) {
+                // Encodage de la cible verrouillée (1..10) sur les bits 3..6 de type_and_active
+                uint8_t encodedTarget = 0;
+                if (sp->type == WEAPON_AIR_TO_AIR && sp->target_kind == 1 && sp->target_idx >= 0 && sp->target_idx < MAX_CLIENTS) {
+                    encodedTarget = (uint8_t)(sp->target_idx + 1);
+                }
                 outPacket.projectiles[activeProjCount++] = (NetProjectile){
                     .x = QuantizeCoord(sp->position.x),
                     .y = QuantizeCoord(sp->position.y),
                     .z = QuantizeCoord(sp->position.z),
-                    .type_and_active = (uint8_t)((sp->type & 0x7F) | 0x80)
+                    .type_and_active = (uint8_t)((sp->type & 0x07) | ((encodedTarget & 0x0F) << 3) | 0x80)
                 };
             }
         }

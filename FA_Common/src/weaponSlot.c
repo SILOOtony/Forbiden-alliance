@@ -2,102 +2,93 @@
 
 void InitWeaponSlotsForClass(Weapon slots[MAX_WEAPON_SLOTS], PlaneClass plane_class) {
     if (plane_class == PLANE_INTERCEPTOR) {
-        // Intercepteur : Spécialisé chasse Air-Air et tir rapide
         slots[0] = (Weapon){
             .type = WEAPON_ROCKET,
             .name = "Light Rockets",
-            .ammo = 16,
-            .max_ammo = 16,
-            .reload_time = 1.0f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 360.0f,
-            .damage = 25
+            .ammo = 16, .max_ammo = 16,
+            .reload_time = 1.0f, .reload_timer = 0.0f,
+            .projectile_speed = 360.0f, .damage = 25
         };
         slots[1] = (Weapon){
             .type = WEAPON_AIR_TO_AIR,
             .name = "Fast Air-to-Air",
-            .ammo = 10,
-            .max_ammo = 10,
-            .reload_time = 1.4f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 520.0f,
-            .damage = 65
+            .ammo = 10, .max_ammo = 10,
+            .reload_time = 1.4f, .reload_timer = 0.0f,
+            .projectile_speed = 520.0f, .damage = 65
         };
         slots[2] = (Weapon){
             .type = WEAPON_AIR_TO_GROUND,
             .name = "Light Bomb",
-            .ammo = 2,
-            .max_ammo = 2,
-            .reload_time = 4.0f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 240.0f,
-            .damage = 75
+            .ammo = 2, .max_ammo = 2,
+            .reload_time = 4.0f, .reload_timer = 0.0f,
+            .projectile_speed = 240.0f, .damage = 75
         };
-    } 
+        slots[3] = (Weapon){
+            .type = WEAPON_FLARES,
+            .name = "Leurres [F]",
+            .ammo = 2, .max_ammo = 2,
+            .reload_time = 9.0f, .reload_timer = 0.0f,
+            .projectile_speed = 25.0f, .damage = 0
+        };
+    }
     else if (plane_class == PLANE_BOMBER) {
-        // Bombardier : Spécialisé destruction de bâtiments (Air-Sol lourd)
         slots[0] = (Weapon){
             .type = WEAPON_ROCKET,
             .name = "Heavy Rockets",
-            .ammo = 12,
-            .max_ammo = 12,
-            .reload_time = 2.0f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 260.0f,
-            .damage = 50
+            .ammo = 12, .max_ammo = 12,
+            .reload_time = 2.0f, .reload_timer = 0.0f,
+            .projectile_speed = 260.0f, .damage = 50
         };
         slots[1] = (Weapon){
             .type = WEAPON_AIR_TO_AIR,
             .name = "Defense A2A",
-            .ammo = 8,
-            .max_ammo = 8,
-            .reload_time = 2.5f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 380.0f,
-            .damage = 45
+            .ammo = 8, .max_ammo = 8,
+            .reload_time = 2.5f, .reload_timer = 0.0f,
+            .projectile_speed = 380.0f, .damage = 45
         };
         slots[2] = (Weapon){
             .type = WEAPON_AIR_TO_GROUND,
             .name = "Mega Bomb",
-            .ammo = 8,
-            .max_ammo = 8,
-            .reload_time = 2.5f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 220.0f,
-            .damage = 160
+            .ammo = 8, .max_ammo = 8,
+            .reload_time = 2.5f, .reload_timer = 0.0f,
+            .projectile_speed = 220.0f, .damage = 160
         };
-    } 
+        slots[3] = (Weapon){
+            .type = WEAPON_FLARES,
+            .name = "Leurres [F]",
+            .ammo = 6, .max_ammo = 6,
+            .reload_time = 5.5f, .reload_timer = 0.0f,
+            .projectile_speed = 25.0f, .damage = 0
+        };
+    }
     else {
-        // Chasseur Polyvalent (par défaut)
         slots[0] = (Weapon){
             .type = WEAPON_ROCKET,
             .name = "Rockets",
-            .ammo = 12,
-            .max_ammo = 12,
-            .reload_time = 1.5f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 300.0f,
-            .damage = 35
+            .ammo = 12, .max_ammo = 12,
+            .reload_time = 1.5f, .reload_timer = 0.0f,
+            .projectile_speed = 300.0f, .damage = 35
         };
         slots[1] = (Weapon){
             .type = WEAPON_AIR_TO_AIR,
             .name = "Air-to-Air",
-            .ammo = 6,
-            .max_ammo = 6,
-            .reload_time = 2.5f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 420.0f,
-            .damage = 55
+            .ammo = 6, .max_ammo = 6,
+            .reload_time = 2.5f, .reload_timer = 0.0f,
+            .projectile_speed = 420.0f, .damage = 55
         };
         slots[2] = (Weapon){
             .type = WEAPON_AIR_TO_GROUND,
             .name = "Air-to-Ground",
-            .ammo = 4,
-            .max_ammo = 4,
-            .reload_time = 3.5f,
-            .reload_timer = 0.0f,
-            .projectile_speed = 240.0f,
-            .damage = 120
+            .ammo = 4, .max_ammo = 4,
+            .reload_time = 3.5f, .reload_timer = 0.0f,
+            .projectile_speed = 240.0f, .damage = 120
+        };
+        slots[3] = (Weapon){
+            .type = WEAPON_FLARES,
+            .name = "Leurres [F]",
+            .ammo = 4, .max_ammo = 4,
+            .reload_time = 7.0f, .reload_timer = 0.0f,
+            .projectile_speed = 25.0f, .damage = 0
         };
     }
 }

@@ -3,13 +3,25 @@
 
 void InitProjectile(Projectile *projectile, const Weapon *weapon, const PlayerState *state) {
     projectile->type = weapon->type;
-    projectile->direction = (Vector3){
-        -cosf(state->pitch) * sinf(state->yaw),
-        sinf(state->pitch),
-        -cosf(state->pitch) * cosf(state->yaw)
-    };
+
+    if (weapon->type == WEAPON_FLARES) {
+        // Les leurres sont éjectés vers l'arrière et légèrement vers le bas
+        projectile->direction = (Vector3){
+             cosf(state->pitch) * sinf(state->yaw),
+            -sinf(state->pitch) - 0.35f,
+             cosf(state->pitch) * cosf(state->yaw)
+        };
+        projectile->lifetime = 1.8f;
+    } else {
+        projectile->direction = (Vector3){
+            -cosf(state->pitch) * sinf(state->yaw),
+             sinf(state->pitch),
+            -cosf(state->pitch) * cosf(state->yaw)
+        };
+        projectile->lifetime = 3.0f;
+    }
+
     projectile->position = state->position;
-    projectile->lifetime = 3.0f;
     projectile->velocity = (Vector3){ 0.0f, 0.0f, 0.0f };
     projectile->speed = weapon->projectile_speed;
     projectile->damage = weapon->damage;
@@ -30,7 +42,6 @@ bool SpawnProjectile(PlayerState *state, Projectile projectiles[], int maxProjec
         }
     }
 
-    // Si les 15 emplacements sont déjà en vol (spam-clic rapide), on recycle le plus ancien
     if (chosenSlot == -1) {
         chosenSlot = 0;
         float minLife = projectiles[0].lifetime;
@@ -72,15 +83,19 @@ void DrawProjectiles(const Projectile projectiles[], int maxProjectiles) {
         if (projectiles[i].active) {
             if (projectiles[i].type == WEAPON_ROCKET) {
                 DrawSphere(projectiles[i].position, 0.8f, ORANGE);
-            } 
+            }
             else if (projectiles[i].type == WEAPON_AIR_TO_AIR) {
-                DrawSphere(projectiles[i].position, 0.6f, BLUE);
-            } 
+                DrawSphere(projectiles[i].position, 0.65f, SKYBLUE);
+            }
             else if (projectiles[i].type == WEAPON_AIR_TO_GROUND) {
                 DrawSphere(projectiles[i].position, 1.4f, DARKGRAY);
             }
             else if (projectiles[i].type == WEAPON_DRONE_BLASTER) {
                 DrawSphere(projectiles[i].position, 0.4f, YELLOW);
+            }
+            else if (projectiles[i].type == WEAPON_FLARES) {
+                DrawSphere(projectiles[i].position, 1.15f, GOLD);
+                DrawSphere(projectiles[i].position, 0.65f, WHITE);
             }
         }
     }
